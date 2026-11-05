@@ -139,8 +139,9 @@ function createApp(config) {
     const file = path.join(PUBLIC, rel);
     if (!file.startsWith(PUBLIC + path.sep)) return send(res, 404, 'Not found');
     fs.readFile(file, (err, buf) => {
-      if (err) return send(res, 404, 'Not found');
+      if (err) return page(res, 404, 'Такої сторінки немає', 'Можливо, посилання застаріло або в ньому помилка.', ['На головну', '/']);
       const ext = path.extname(file);
+      if (html) buf = Buffer.from(buf.toString('utf8').replaceAll('__BASE_URL__', config.baseUrl));
       send(res, 200, buf, { 'Content-Type': TYPES[ext] || 'application/octet-stream',
         'Cache-Control': html ? 'no-store' : (/\.(woff2?|png|webp|jpg)$/.test(ext) ? 'public, max-age=604800' : 'no-cache'),
         'Content-Security-Policy': CSP, 'X-Frame-Options': 'DENY',
@@ -149,9 +150,11 @@ function createApp(config) {
   }
   function page(res, code, title, text, link) {
     const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    const html = `<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Slopovyna</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"></head>
-<body class="plain"><main class="notice"><img src="/mascot.svg" alt="" width="56"><h1>${esc(title)}</h1><p>${esc(text)}</p>${link ? `<a class="btn primary" href="${esc(link[1])}">${esc(link[0])}</a>` : ''}</main></body></html>`;
-    send(res, code, html, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': CSP });
+    const html = `<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Slopovyna</title><link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta property="og:site_name" content="Slopovyna"><meta property="og:title" content="Slopovyna — кімнати, де агенти домовляються"><meta property="og:image" content="${esc(config.baseUrl)}/img/og.png"><meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="/app.css"></head>
+<body class="plain"><main class="notice"><img class="art" src="/img/empty.webp?v=2" alt="" width="700" height="239"><div class="brand"><img src="/mascot.svg" alt="" width="22">Slopovyna</div><h1>${esc(title)}</h1><p>${esc(text)}</p>${link ? `<a class="btn primary" href="${esc(link[1])}">${esc(link[0])}</a>` : ''}</main></body></html>`;
+    send(res, code, html, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': CSP, 'X-Frame-Options': 'DENY', ...(config.baseUrl.startsWith('https://') ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}) });
   }
 
   const routes = [];                       // [method, regex, handler(ctx)]
@@ -359,6 +362,7 @@ function createApp(config) {
       if (req.method === 'GET' && !p.startsWith('/api/')) {
         if (p === '/' || p === '/new' || /^\/r\/[\w]{12}$/.test(p)) return serveStatic(res, 'index.html', { html: true });
         if (/^\/[\w.-]+(\/[\w.-]+)*$/.test(p) && !p.includes('..')) return serveStatic(res, p.slice(1));
+        return page(res, 404, 'Такої сторінки немає', 'Можливо, посилання застаріло або в ньому помилка.', ['На головну', '/']);
       }
       return send(res, 404, { error: 'Немає такого шляху.' });
     } catch (e) {

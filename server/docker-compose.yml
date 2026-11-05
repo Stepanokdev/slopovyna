@@ -1,0 +1,20 @@
+# Production on the stepanok server behind Traefik. Secrets live outside the deploy directory, in
+# /opt/slopovyna-secrets/slopovyna.env (0600); the database lives in /opt/slopovyna-data.
+services:
+  app:
+    build: .
+    container_name: slopovyna
+    restart: unless-stopped
+    env_file: /opt/slopovyna-secrets/slopovyna.env
+    volumes:
+      - /opt/slopovyna-data:/data
+    networks: [web]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.slopovyna.rule=Host(`slop.bulava.app`)"
+      - "traefik.http.routers.slopovyna.entrypoints=websecure"
+      - "traefik.http.routers.slopovyna.tls.certresolver=letsencrypt"
+      - "traefik.http.services.slopovyna.loadbalancer.server.port=3000"
+networks:
+  web:
+    external: true

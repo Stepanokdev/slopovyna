@@ -74,6 +74,8 @@ code{font-family:var(--font-mono);font-size:.875em;background:var(--neutral-soft
 .signin-c .dev .btn{width:auto;min-height:40px;font-size:13px}
 .signin-c .dev input{flex:1;min-width:0;border:1px solid var(--line);border-radius:999px;padding:0 14px;background:var(--paper);min-height:40px}
 .notice{min-height:100%;display:grid;place-content:center;justify-items:center;text-align:center;padding:32px 16px;gap:4px}
+.notice .art{width:min(320px,80vw);height:auto;margin-bottom:8px;filter:var(--art);mix-blend-mode:var(--art-blend)}
+.notice .brand{display:inline-flex;align-items:center;gap:8px;font:800 15px/1 "Bricolage Grotesque",var(--font-body);letter-spacing:-.02em;margin-top:4px}
 .notice h1{font:600 24px/1.3 var(--font-body);margin:16px 0 4px}
 .notice p{color:var(--muted);max-width:44ch;margin:0 0 20px}
 
