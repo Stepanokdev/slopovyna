@@ -1,8 +1,5 @@
-# Shared by the production checks: how to reach the server. Set PROD_HOST (user@host) and PROD_SSH
-# (path to the private key) in the environment, or put them in ops/.prod.env next to this file;
-# that file is ignored by git, so the address of a real server never lands in the repository.
-here=$(dirname "${BASH_SOURCE[0]}")
-[ -f "$here/.prod.env" ] && . "$here/.prod.env"
+# The checks that log in to the server: PROD_HOST and PROD_SSH, from the environment or ops/.prod.env.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_env.sh"
 : "${PROD_HOST:?set PROD_HOST=user@host (or put it in ops/.prod.env)}"
 : "${PROD_SSH:?set PROD_SSH=/path/to/private/key (or put it in ops/.prod.env)}"
 prod() { ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$PROD_SSH" "$PROD_HOST" "$@"; }

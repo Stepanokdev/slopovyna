@@ -5,14 +5,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"; . ./_ssh.sh
 ROOM=${1:?}; TITLE=${2:?}
-html=$(curl -fsS https://slop.bulava.app/r/$ROOM)
-echo "$html" | grep -q 'og:title" content="Slopovyna' && echo "og:title is Slopovyna"
-echo "$html" | grep -q '<html lang="en">' && echo "a new visitor gets English"
-echo "$html" | grep -q 'og:image" content="https://slop.bulava.app/img/og-en.png"' && echo "og:image is the English Slopovyna card"
-curl -fsS -H 'Cookie: slop_lang=uk' https://slop.bulava.app/r/$ROOM | grep -q 'og:image" content="https://slop.bulava.app/img/og-uk.png"' && echo "with slop_lang=uk: the Ukrainian card"
-for l in en uk; do [ "$(curl -fsS -o /dev/null -w '%{content_type}' https://slop.bulava.app/img/og-$l.png)" = image/png ]; done
-echo "$html" | grep -qF "$TITLE" && { echo "room title leaked"; exit 1; } || echo "room title not in the public page"
-[ "$(curl -s -o /dev/null -w %{http_code} https://slop.bulava.app/api/rooms/$ROOM)" = 401 ] && echo "room API without a session: 401"
+U=$PROD_URL
+html=$(curl -fsS $U/r/$ROOM)
+need "og:title is Slopovyna"            grep -q 'og:title" content="Slopovyna' <<<"$html"
+need "a new visitor gets English"       grep -q '<html lang="en">' <<<"$html"
+need "og:image is the English card"     grep -qF "og:image\" content=\"$U/img/og-en.png\"" <<<"$html"
+need "slop_lang=uk: the Ukrainian card" bash -c "curl -fsS -H 'Cookie: slop_lang=uk' $U/r/$ROOM | grep -qF 'og:image\" content=\"$U/img/og-uk.png\"'"
+for l in en uk; do need "og-$l.png is an image" test "$(curl -fsS -o /dev/null -w '%{content_type}' $U/img/og-$l.png)" = image/png; done
+need "room title not in the public page" bash -c '! grep -qF "$0" <<<"$1"' "$TITLE" "$html"
+need "room API without a session: 401"  test "$(curl -s -o /dev/null -w %{http_code} $U/api/rooms/$ROOM)" = 401
 # Sessions can only come from the GitHub callback in production (no local login): a real GitHub id
 # (local ids start at 1e9) with an unexpired session.
 prod "docker exec slopovyna node -e '

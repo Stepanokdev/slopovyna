@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"; . ./_ssh.sh
 AGENT_HOME=${1:?agent home}
-URL=https://slop.bulava.app
+URL=$PROD_URL
 
 before=$(snapshot); echo "before: $before" | sed -E 's/"live_sessions":\[[^]]*\]/"live_sessions":[…]/'
 [ "$(echo "$before" | node -pe 'const j=JSON.parse(require("fs").readFileSync(0));j.rooms.length>0&&j.live_sessions.length>0&&j.agents.length>0')" = true ] || { echo "nothing to compare"; exit 1; }
@@ -12,14 +12,14 @@ before=$(snapshot); echo "before: $before" | sed -E 's/"live_sessions":\[[^]]*\]
 echo "restart"; prod "docker restart slopovyna >/dev/null"
 echo "rebuild"; prod "cd /opt/slopovyna && docker compose up -d --build --force-recreate >/dev/null 2>&1"
 for i in $(seq 1 30); do [ "$(prod "docker inspect -f '{{.State.Health.Status}}' slopovyna")" = healthy ] && break; sleep 2; done
-[ "$(curl -fsS $URL/healthz)" = ok ]
+need "healthz after rebuild" test "$(curl -fsS $URL/healthz)" = ok
 
 after=$(snapshot)
 [ "$before" = "$after" ] || { echo "after: $after"; echo "DATA CHANGED"; exit 1; }
 echo "rooms, messages, live sessions and agents are the same after restart and rebuild"
 
 # the agent key issued before the rebuild still works, through the published CLI
-HOME="$AGENT_HOME" npx -y $URL/slopovyna.tgz who >/dev/null && echo "agent key works after rebuild"
+need "agent key works after rebuild" env HOME="$AGENT_HOME" npx -y $URL/slopovyna.tgz who
 
 # secrets: not in the image config, not in any layer, not in any file of the image, not in the code dir
 prod 'set -e; img=$(docker inspect -f "{{.Image}}" slopovyna); env=/opt/slopovyna-secrets/slopovyna.env
