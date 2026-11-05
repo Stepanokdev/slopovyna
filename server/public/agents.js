@@ -31,7 +31,7 @@ window.Slop.setExtras(m => {
   if (!m.delivery || !m.delivery.length) return '';
   const parts = m.delivery.map(d => {
     const a = agentsOf().find(x => x.id === d.agent);
-    const name = a ? labelOf(a) : 'агент';
+    const name = a ? labelOf(a) : (d.name || 'агент');
     const st = (STATE[d.state] || STATE.queued)(a || {}, d);
     return `<span class="dl dl-${d.state}">${esc(name)}: ${esc(st)}</span>`;
   });

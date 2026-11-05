@@ -333,7 +333,8 @@ function msgHtml(m) {
   const owner = a.kind === 'agent' ? `<span class="o">${esc(a.owner_name || '')}</span><span class="tag">агент</span>` : '';
   return `<div class="m" id="m${m.id}">${avatar(a)}<div><div class="nm">${esc(a.name)}${owner}<time datetime="${new Date(m.at).toISOString()}">${timeFmt.format(m.at)}</time></div>${body}${extra}</div></div>`;
 }
-let renderExtras = () => '';   // attachments and delivery state plug in here
+const extraRenderers = [];      // attachments and delivery state plug in here
+const renderExtras = m => extraRenderers.map(f => f(m)).join('');
 
 function onScroll() {
   const sc = $('#sc');
@@ -482,6 +483,7 @@ function renderPanel() {
       ${panelAgents()}
       <div class="acts">${panelActions()}${owner ? `<button class="btn" data-act="invite">${I.user}Запросити колегу</button>` : ''}</div>
       ${owner ? `<div id="invites"></div>` : ''}
+      ${panelFiles()}
       ${owner ? `<h3>Кімната</h3><div class="fld"><label for="rt">Назва</label><div class="inp plain"><input id="rt" value="${esc(S.room.title)}" maxlength="80"></div></div>
         <div class="acts"><button class="btn danger" data-act="delete">Видалити кімнату</button></div>` : ''}
       ${panelNotes()}
@@ -493,7 +495,7 @@ function renderPanel() {
     rt.addEventListener('change', async () => { const t = rt.value.trim(); if (!t || t === S.room.title) return; try { await api('PATCH', `/api/rooms/${S.room.id}`, { title: t }); S.room.title = t; renderHeader(); loadRooms(); toast('Назву змінено.'); } catch (e) { toast(e.message); } });
   }
 }
-let panelAgents = () => '', panelActions = () => '', panelNotes = () => '';
+let panelAgents = () => '', panelActions = () => '', panelNotes = () => '', panelFiles = () => '';
 async function loadInvites() {
   const el = $('#invites'); if (!el) return;
   try {
@@ -594,9 +596,9 @@ matchMedia('(max-width:860px)').addEventListener('change', () => { S.side = narr
 const actions = {};
 window.Slop = {
   S, api, esc, md, avatar, labelOf, toast, copy, I, $, actions, refreshRoom, renderFeed, myId, timeFmt, dayFmt,
-  setExtras: f => { renderExtras = f; }, setPanel: o => { if (o.agents) panelAgents = o.agents; if (o.actions) panelActions = o.actions; if (o.notes) panelNotes = o.notes; },
+  setExtras: f => { extraRenderers.push(f); }, prependExtras: f => { extraRenderers.unshift(f); }, setPanel: o => { if (o.agents) panelAgents = o.agents; if (o.actions) panelActions = o.actions; if (o.notes) panelNotes = o.notes; if (o.files) panelFiles = o.files; },
   setComposer: h => { composerHooks = { ...composerHooks, ...h }; },
-  on: (name, f) => { (sseHandlers[name] ||= []).push(f); },
+  on: (name, f) => { (sseHandlers[name] ||= []).push(f); }, csrf: () => CSRF,
   renderPanel: () => renderPanel(), renderHeader: () => renderHeader(),
 };
 document.addEventListener('DOMContentLoaded', boot);

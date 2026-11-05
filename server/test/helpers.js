@@ -7,7 +7,7 @@ const { createApp } = require('../src/app');
 async function start(extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'slop-test-'));
   const config = { port: 0, baseUrl: 'http://127.0.0.1:0', origin: 'http://127.0.0.1:0', dbFile: path.join(dir, 'slop.db'),
-    github: { clientId: '', clientSecret: '' }, devLogin: true, ...extra };
+    github: { clientId: '', clientSecret: '' }, devLogin: true, secretKey: 'test-secret-key', allowHttpStorage: true, ...extra };
   const app = createApp(config);
   await new Promise(r => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;

@@ -10,7 +10,19 @@ const config = {
   dbFile: process.env.DB_FILE || path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'slop.db'),
   github: { clientId: process.env.GITHUB_CLIENT_ID || '', clientSecret: process.env.GITHUB_CLIENT_SECRET || '' },
   devLogin: process.env.SLOP_DEV_LOGIN === '1',
+  connectSrc: process.env.SLOP_CONNECT_SRC || 'https:',
+  allowHttpStorage: process.env.SLOP_ALLOW_HTTP_STORAGE === '1',
 };
+// Key for sealing room bucket secrets: SLOP_SECRET, or a random key kept next to the database.
+config.secretKey = process.env.SLOP_SECRET || (() => {
+  const fs = require('node:fs'), f = path.join(path.dirname(config.dbFile), 'secret.key');
+  try { return fs.readFileSync(f, 'utf8').trim(); } catch {}
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const k = require('node:crypto').randomBytes(32).toString('hex');
+  fs.writeFileSync(f, k, { mode: 0o600 });
+  return k;
+})();
+if (config.allowHttpStorage && process.env.NODE_ENV === 'production') { console.error('SLOP_ALLOW_HTTP_STORAGE is for local testing only'); process.exit(1); }
 if (config.devLogin && process.env.NODE_ENV === 'production') { console.error('SLOP_DEV_LOGIN is for local development only'); process.exit(1); }
 if (!config.devLogin && (!config.github.clientId || !config.github.clientSecret)) console.warn('GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET are not set: nobody can sign in');
 

@@ -266,3 +266,44 @@ dialog.search{width:min(640px,calc(100vw - 32px));margin-top:12vh}
 .dv .dl-received::before{content:"✓ ";color:var(--success)}
 .dv .dl-replied::before,.dv .dl-read::before{content:"✓✓ ";color:var(--success)}
 @media (max-width:860px){.kv{grid-template-columns:1fr;gap:2px}.kv dd{margin-bottom:8px}}
+
+/* ---------------- files */
+.chips{display:flex;flex-wrap:wrap;gap:8px;padding:6px 8px 0}
+.chip{display:flex;align-items:center;gap:8px;max-width:100%;padding:6px 6px 6px 10px;border:1px solid var(--line);border-radius:12px;font-size:13px;background:var(--paper)}
+.chip svg{width:16px;height:16px;flex:none;color:var(--muted)}
+.chip .cn{font-weight:600;min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip .cs{color:var(--faint);font-size:12px;min-width:0}
+.chip.error{border-color:var(--error);background:var(--error-soft)}
+.chip.error .cs{color:var(--error)}
+.chip button{border:0;background:none;cursor:pointer;font-size:12px;font-weight:600;color:var(--ink);padding:4px 6px;border-radius:6px}
+.chip button:hover{background:var(--hover)}
+.chip button.x{width:24px;height:24px;padding:0;display:grid;place-items:center}
+.chip button.x svg{width:12px;height:12px}
+.mn.drop::after{content:"Відпусти, щоб прикріпити";position:absolute;inset:8px;border:2px dashed var(--accent);border-radius:16px;background:color-mix(in srgb,var(--paper) 85%,transparent);display:grid;place-items:center;font-weight:600;color:var(--accent-text);z-index:30;pointer-events:none}
+.att{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.mine .att{justify-content:flex-end}
+.att-img{display:block;padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--side);cursor:zoom-in;max-width:min(320px,100%)}
+.att-img img{display:block;max-width:100%;max-height:360px;height:auto}
+.att-img.ph{width:240px;height:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--faint);font-size:12px;cursor:default}
+.fc{display:flex;align-items:center;gap:12px;width:340px;max-width:100%;padding:10px 10px 10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}
+.fc .ic{width:36px;height:36px;border-radius:8px;background:var(--av-cx-bg);color:var(--av-cx);display:grid;place-items:center;flex:none}
+.fc .ic svg{width:18px;height:18px}
+.fc .fm{flex:1;min-width:0}
+.fc b{display:block;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fc small{display:block;font-size:12px;color:var(--faint);line-height:1.4}
+.fc.off .ic{background:var(--neutral-soft);color:var(--faint)}
+.fc.off small{color:var(--warning)}
+dialog.wide{width:min(900px,calc(100vw - 32px))}
+.lb img{display:block;max-width:100%;max-height:70vh;margin:0 auto;border-radius:8px}
+.store{margin:0 8px;padding:14px;border:1px solid var(--line);border-radius:12px;display:grid;gap:6px;font-size:13px}
+.store span{color:var(--muted);line-height:1.5}
+.store small{font-size:12px;color:var(--faint)}
+.store .row-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+progress.meter{width:100%;height:6px;appearance:none;border:0;border-radius:999px;background:var(--neutral-soft);overflow:hidden}
+progress.meter::-webkit-progress-bar{background:var(--neutral-soft);border-radius:999px}
+progress.meter::-webkit-progress-value{background:var(--ink);border-radius:999px}
+progress.meter::-moz-progress-bar{background:var(--ink)}
+.fld2{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:12px}
+.db .fld + .fld{margin-top:12px}
+.df.flat{padding:16px 0 0}
+code.pre{white-space:pre;font-size:12px;overflow:auto;display:block}

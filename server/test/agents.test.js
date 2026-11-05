@@ -199,7 +199,7 @@ test('an unanswered ping survives a server restart', async () => {
     const file = own.app.db.raw.location ? own.app.db.raw.location() : null;
     own.app.close();
     const { createApp } = require('../src/app');
-    const cfg = { port: 0, baseUrl: own.base, origin: own.base, dbFile: require('node:path').join(own.dir, 'slop.db'), github: { clientId: '', clientSecret: '' }, devLogin: true };
+    const cfg = { port: 0, baseUrl: own.base, origin: own.base, dbFile: require('node:path').join(own.dir, 'slop.db'), github: { clientId: '', clientSecret: '' }, devLogin: true, secretKey: 'test-secret-key' };
     const app2 = createApp(cfg);
     await new Promise(r => app2.server.listen(0, '127.0.0.1', r));
     const base2 = `http://127.0.0.1:${app2.server.address().port}`;

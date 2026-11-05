@@ -112,8 +112,8 @@ function install(ctx) {
 
   // Delivery state of mentions, under the message in the browser.
   function delivery(messageId) {
-    return db.all("SELECT agent_id, state, delivered_at, acked_at, reply_id FROM inbox WHERE message_id = ? AND reason = 'mention'", messageId)
-      .map(r => ({ agent: `a:${r.agent_id}`, state: r.state === 'acked' ? (r.reply_id ? 'replied' : 'read') : r.state === 'leased' ? 'received' : 'queued', at: r.acked_at || r.delivered_at || null }));
+    return db.all("SELECT i.agent_id, i.state, i.delivered_at, i.acked_at, i.reply_id, a.model, u.name AS owner_name FROM inbox i JOIN agents a ON a.id = i.agent_id JOIN users u ON u.id = a.owner_id WHERE i.message_id = ? AND i.reason = 'mention'", messageId)
+      .map(r => ({ agent: `a:${r.agent_id}`, name: `${r.model} · ${r.owner_name}`, state: r.state === 'acked' ? (r.reply_id ? 'replied' : 'read') : r.state === 'leased' ? 'received' : 'queued', at: r.acked_at || r.delivered_at || null }));
   }
   hooks.decorate.push(v => { if (v.mentions.some(t => t.startsWith('a:'))) v.delivery = delivery(v.id); });
   function pushDelivery(roomId, messageId) { push(memberIds(roomId), 'delivery', { room: roomId, message: messageId, delivery: delivery(messageId) }); }
@@ -315,6 +315,8 @@ function install(ctx) {
     const w = {
       wake: () => { if (done) return; const e = take(); if (e) { finish(); send(res, 200, eventView(e)); } },
       kill: () => { if (done) return; finish(); send(res, 401, { error: 'Тебе відключили від кімнати. Зупинись і скажи своєму власникові.' }); },
+      // someone opens a file this agent sent: hand the request to the waiting client, which uploads it
+      file: payload => { if (done) return false; finish(); send(res, 200, { type: 'file_request', ...payload }); return true; },
     };
     const t = setTimeout(() => { if (done) return; finish(); send(res, 204, ''); }, timeout * 1000);
     // a lease that ran out elsewhere becomes takeable without a new message: look again now and then
@@ -359,6 +361,7 @@ function install(ctx) {
   agentRoute('POST', '/messages', async ({ req, res, a }) => {
     const b = await readJSON(req);
     const text = String(b.text || '');
+    const hasFiles = Array.isArray(b.attachments) && b.attachments.length > 0;
     const kind = b.kind === 'summary' ? 'summary' : 'message';
     const mentions = Array.isArray(b.mentions) ? b.mentions.map(String) : [];
     const rt = b.reply_to && typeof b.reply_to === 'object' ? b.reply_to : null;
@@ -374,14 +377,14 @@ function install(ctx) {
       if (ev.state !== 'leased' || ev.lease_id !== rt.lease_id) throw new HttpError(409, 'На цей пінг уже відповідає інший твій процес або його закрито. Нічого не повторюй.');
     } else {
       const lastReal = db.get("SELECT author_kind, author_id, created_at FROM messages WHERE room_id = ? AND kind != 'event' ORDER BY id DESC LIMIT 1", a.room_id);
-      if (lastReal && lastReal.author_kind === 'agent' && lastReal.author_id === a.id && Date.now() - lastReal.created_at < TURN_QUIET_MIN * 60e3)
+      if (!hasFiles && lastReal && lastReal.author_kind === 'agent' && lastReal.author_id === a.id && Date.now() - lastReal.created_at < TURN_QUIET_MIN * 60e3)
         throw new HttpError(409, `Зараз не твоя черга: останнє повідомлення твоє. Чекай відповіді (wait). Якщо тиша триватиме ${TURN_QUIET_MIN} хв, можна написати ще раз.`);
     }
     const now = Date.now(), lp = lastPost.get(a.id) || 0;
     if (now - lp < AGENT_GAP_MS) throw new HttpError(429, 'Занадто часто.', { retry_after: Math.ceil((AGENT_GAP_MS - (now - lp)) / 1000) });
     const idem = ev ? `reply-${ev.id}` : (typeof b.idem === 'string' && /^[\w-]{8,64}$/.test(b.idem) ? b.idem : null);
     // Synchronous from here: the lease check above and the write below cannot interleave with another request.
-    const r = postMessage({ roomId: a.room_id, authorKind: 'agent', authorId: a.id, text, kind, mentions, idem });
+    const r = postMessage({ roomId: a.room_id, authorKind: 'agent', authorId: a.id, text, kind, mentions, idem, attachments: b.attachments });
     lastPost.set(a.id, now);
     if (ev) {
       db.run("UPDATE inbox SET state = 'acked', acked_at = ?, reply_id = ? WHERE id = ? AND lease_id = ?", Date.now(), r.message.id, ev.id, ev.lease_id);
@@ -390,7 +393,11 @@ function install(ctx) {
     send(res, r.duplicate ? 200 : 201, { message: forAgent(r.message, a.id), duplicate: r.duplicate });
   });
 
-  return { revoke, killAgent };
+  function requestFile(agentId, payload) {
+    for (const w of [...(waiters.get(agentId) || [])]) if (w.file(payload)) return true;
+    return false;
+  }
+  return { revoke, killAgent, requestFile, agentAuth, listening };
 }
 
 module.exports = { install, makeCode, normCode };

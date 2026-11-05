@@ -14,12 +14,14 @@ const INVITE_DAYS = 7;
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml', '.woff': 'font/woff', '.woff2': 'font/woff2', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.ico': 'image/x-icon' };
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://avatars.githubusercontent.com; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com; object-src 'none'";
+const CSP_BASE = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://avatars.githubusercontent.com; font-src 'self'; connect-src 'self' __CONNECT__; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com; object-src 'none'";
 
 function createApp(config) {
+  // Files go straight between the browser and a room's bucket, so fetch() may reach https origins.
+  const CSP = CSP_BASE.replace('__CONNECT__', config.connectSrc || 'https:');
   const db = open(config.dbFile);
   const auth = makeAuth({ db, config });
-  const hooks = { onMessage: [], afterMessage: [], decorate: [], onMemberRemove: [], onRoomDelete: [] };   // agents plug in here
+  const hooks = { onMessage: [], afterMessage: [], decorate: [], onMemberRemove: [], onRoomDelete: [], attach: [] };   // agents plug in here
 
   // ---------------------------------------------------------------- live updates (SSE per person)
   const streams = new Map();              // user id -> Set<res>
@@ -64,9 +66,10 @@ function createApp(config) {
   }
 
   // ---------------------------------------------------------------- writing messages
-  function postMessage({ roomId, authorKind, authorId, text, kind = 'message', mentions = [], idem = null }) {
+  function postMessage({ roomId, authorKind, authorId, text, kind = 'message', mentions = [], idem = null, attachments = [] }) {
     text = String(text || '').replace(/\r\n/g, '\n');
-    if (!text.trim()) throw new HttpError(400, 'Порожнє повідомлення.');
+    const files = Array.isArray(attachments) ? [...new Set(attachments.map(String))] : [];
+    if (!text.trim() && !files.length) throw new HttpError(400, 'Порожнє повідомлення.');
     if (text.length > MAX_TEXT) throw new HttpError(413, `Задовге повідомлення: ${text.length} символів, межа ${MAX_TEXT}. Довгий текст краще надіслати файлом.`);
     if (authorKind !== 'system') { const s = findSecret(text); if (s) throw new HttpError(422, `Схоже, у повідомленні ${s}. Прибери його: кімнату читають усі учасники та їхні агенти.`); }
     if (idem) {
@@ -81,6 +84,7 @@ function createApp(config) {
         roomId, authorKind, String(authorId), kind, text, text.toLowerCase(), idem, now);
       const id = Number(r.lastInsertRowid);
       for (const t of targets) db.run('INSERT INTO mentions (message_id, target) VALUES (?,?)', id, t);
+      for (const h of hooks.attach) h({ messageId: id, roomId, authorKind, authorId: String(authorId), files });
       db.run('UPDATE rooms SET last_message_at = ? WHERE id = ?', now, roomId);
       if (authorKind === 'human') db.run('UPDATE members SET last_read_id = ? WHERE room_id = ? AND user_id = ?', id, roomId, Number(authorId));
       const m = db.get('SELECT * FROM messages WHERE id = ?', id);
@@ -181,6 +185,7 @@ function createApp(config) {
   });
   let extraRoomInfo = () => ({});
   ctxApi.setExtraRoomInfo = f => { extraRoomInfo = f; };
+  ctxApi.getExtraRoomInfo = () => extraRoomInfo;
   route('PATCH', /^\/api\/rooms\/([\w]{12})$/, async ({ req, res, s, m }) => {
     const me = needMember(m[1], s.user);
     if (me.role !== 'owner') throw new HttpError(403, 'Назву міняє лише власник кімнати.');
@@ -229,7 +234,7 @@ function createApp(config) {
     humanRate(s.user.id);
     const idem = typeof b.idem === 'string' && /^[\w-]{8,64}$/.test(b.idem) ? b.idem : null;
     const kind = b.kind === 'summary' ? 'summary' : 'message';
-    const r = postMessage({ roomId: m[1], authorKind: 'human', authorId: s.user.id, text: b.text, kind, mentions: b.mentions, idem });
+    const r = postMessage({ roomId: m[1], authorKind: 'human', authorId: s.user.id, text: b.text, kind, mentions: b.mentions, idem, attachments: b.attachments });
     send(res, r.duplicate ? 200 : 201, r.message);
   });
   const rate = new Map();
@@ -363,8 +368,9 @@ function createApp(config) {
     }
   }
 
-  require('./agents').install(ctxApi);
+  ctxApi.agents = require('./agents').install(ctxApi);
   require('./cli-dist').install(ctxApi);
+  require('./files').install(ctxApi);
 
   const server = http.createServer(handle);
   server.requestTimeout = 0;

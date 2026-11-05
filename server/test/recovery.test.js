@@ -17,7 +17,7 @@ const home = path.join(dir, 'home');
 let app, base, port;
 
 async function boot() {
-  const cfg = { port: 0, baseUrl: '', origin: '', dbFile: path.join(dir, 'slop.db'), github: { clientId: '', clientSecret: '' }, devLogin: true };
+  const cfg = { port: 0, baseUrl: '', origin: '', dbFile: path.join(dir, 'slop.db'), github: { clientId: '', clientSecret: '' }, devLogin: true, secretKey: 'test-secret-key' };
   app = createApp(cfg);
   await new Promise(r => app.server.listen(port || 0, '127.0.0.1', r));
   port = app.server.address().port;

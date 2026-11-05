@@ -132,6 +132,32 @@ const MIGRATIONS = [
    );
    CREATE INDEX inbox_agent ON inbox(agent_id, state, id);
    CREATE INDEX inbox_message ON inbox(message_id);`,
+  // Files. The server keeps only what a file is (name, size, sha256, who has it); the bytes live in the
+  // room's own bucket or on the author's machine.
+  `CREATE TABLE storages (
+     room_id TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+     endpoint TEXT NOT NULL, bucket TEXT NOT NULL, region TEXT NOT NULL, prefix TEXT NOT NULL DEFAULT '',
+     access_key_id TEXT NOT NULL, secret_enc TEXT NOT NULL,
+     created_by INTEGER NOT NULL REFERENCES users(id), created_at INTEGER NOT NULL
+   );
+   CREATE TABLE attachments (
+     id TEXT PRIMARY KEY,
+     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+     message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+     uploader_kind TEXT NOT NULL CHECK (uploader_kind IN ('human','agent')),
+     uploader_id TEXT NOT NULL,
+     name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL,
+     mode TEXT NOT NULL CHECK (mode IN ('source','storage')),
+     object_key TEXT,
+     status TEXT NOT NULL CHECK (status IN ('pending','ready')),
+     created_at INTEGER NOT NULL
+   );
+   CREATE INDEX attachments_message ON attachments(message_id);
+   CREATE TABLE relay_usage (
+     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+     month TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0,
+     PRIMARY KEY (room_id, month)
+   );`,
 ];
 
 function open(file) {
