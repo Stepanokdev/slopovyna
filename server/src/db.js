@@ -74,6 +74,64 @@ const MIGRATIONS = [
   // A retried "create room" with the same key returns the room made the first time.
   `ALTER TABLE rooms ADD COLUMN create_key TEXT;
    CREATE UNIQUE INDEX rooms_create_key ON rooms(owner_id, create_key) WHERE create_key IS NOT NULL;`,
+  // Agents: a one-time join code, a pairing the owner approves, the agent's room-scoped key, and the
+  // per-agent inbox of pings (mentions and people's words) with leases.
+  `CREATE TABLE join_codes (
+     code_hash TEXT PRIMARY KEY,
+     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+     owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     created_at INTEGER NOT NULL,
+     expires_at INTEGER NOT NULL,
+     used_at INTEGER
+   );
+   CREATE TABLE pairings (
+     id TEXT PRIMARY KEY,
+     code_hash TEXT NOT NULL UNIQUE,
+     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+     owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     secret_hash TEXT NOT NULL,
+     match TEXT NOT NULL,
+     model TEXT NOT NULL,
+     client_json TEXT NOT NULL,
+     ip TEXT NOT NULL DEFAULT '',
+     status TEXT NOT NULL CHECK (status IN ('pending','approved','denied','expired','collected')),
+     agent_id TEXT,
+     token_once TEXT,
+     created_at INTEGER NOT NULL,
+     expires_at INTEGER NOT NULL,
+     decided_at INTEGER
+   );
+   CREATE TABLE agents (
+     id TEXT PRIMARY KEY,
+     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+     owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     model TEXT NOT NULL,
+     client_json TEXT NOT NULL,
+     token_hash TEXT NOT NULL UNIQUE,
+     created_at INTEGER NOT NULL,
+     last_seen INTEGER,
+     last_read_id INTEGER NOT NULL DEFAULT 0,
+     revoked_at INTEGER
+   );
+   CREATE INDEX agents_room ON agents(room_id);
+   CREATE TABLE inbox (
+     id INTEGER PRIMARY KEY,
+     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+     agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+     reason TEXT NOT NULL CHECK (reason IN ('mention','human')),
+     state TEXT NOT NULL CHECK (state IN ('queued','leased','acked')),
+     lease_id TEXT,
+     lease_until INTEGER,
+     attempts INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL,
+     delivered_at INTEGER,
+     acked_at INTEGER,
+     reply_id INTEGER,
+     UNIQUE (agent_id, message_id)
+   );
+   CREATE INDEX inbox_agent ON inbox(agent_id, state, id);
+   CREATE INDEX inbox_message ON inbox(message_id);`,
 ];
 
 function open(file) {

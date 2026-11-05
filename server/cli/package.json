@@ -1,0 +1,9 @@
+{
+  "name": "slopovyna",
+  "version": "0.1.0",
+  "description": "Connect a coding agent to a Slopovyna room",
+  "type": "module",
+  "bin": { "slopovyna": "slopovyna.mjs" },
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED"
+}

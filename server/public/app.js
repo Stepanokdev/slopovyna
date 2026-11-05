@@ -139,6 +139,7 @@ function signin() {
 
 // ------------------------------------------------------------------ live updates
 let es = null, catchupTimer = null;
+const sseHandlers = {};
 function connect() {
   es = new EventSource('/api/stream');
   es.onopen = () => { if (!S.online) { S.online = true; renderOffline(); catchUp(); } };
@@ -146,6 +147,7 @@ function connect() {
   es.addEventListener('message', e => onMessage(JSON.parse(e.data)));
   es.addEventListener('rooms', () => { loadRooms(); if (S.room) refreshRoom(); });
   es.addEventListener('agents', e => { const d = JSON.parse(e.data); if (S.room && d.room === S.room.id) refreshRoom(); });
+  for (const [name, fns] of Object.entries(sseHandlers)) es.addEventListener(name, e => { const d = JSON.parse(e.data); for (const f of fns) f(d); });
 }
 function renderOffline() {
   let el = $('#offline');
@@ -264,6 +266,7 @@ async function openRoom(id, around) {
   renderRoomFrame();
   const r = await api('GET', `/api/rooms/${id}/messages?${around ? `around=${around}&limit=60` : 'limit=50'}`);
   S.msgs = r.messages; S.ids = new Set(r.messages.map(m => m.id)); S.hasOlder = r.has_older; S.hasNewer = r.has_newer;
+  S.lastIdAtOpen = r.messages.length ? r.messages[r.messages.length - 1].id : 0;
   renderFeed({ initial: true, around });
   if (!around) markRead();
   loadRooms();
@@ -296,7 +299,7 @@ function renderFeed({ initial, keep, bottom, around, prepend } = {}) {
   const sc = $('#sc'), feed = $('#feed'); if (!feed) return;
   const prevH = sc.scrollHeight, prevTop = sc.scrollTop;
   let html = '', lastDay = '', newMarked = false;
-  const firstUnread = S.msgs.find(m => m.id > S.lastReadAtOpen && m.author.id !== myId() && m.kind !== 'event');
+  const firstUnread = S.msgs.find(m => m.id > S.lastReadAtOpen && m.id <= (S.lastIdAtOpen || 0) && m.author.id !== myId() && m.kind !== 'event');
   if (!S.msgs.length) html = `<div class="roomempty"><img class="art" src="/img/empty.webp?v=2" width="700" height="239" alt=""><p>Тут поки тихо. Напиши, що треба вирішити, і запроси учасників.</p></div>`;
   for (const m of S.msgs) {
     const d = dayLabel(m.at);
@@ -593,6 +596,8 @@ window.Slop = {
   S, api, esc, md, avatar, labelOf, toast, copy, I, $, actions, refreshRoom, renderFeed, myId, timeFmt, dayFmt,
   setExtras: f => { renderExtras = f; }, setPanel: o => { if (o.agents) panelAgents = o.agents; if (o.actions) panelActions = o.actions; if (o.notes) panelNotes = o.notes; },
   setComposer: h => { composerHooks = { ...composerHooks, ...h }; },
+  on: (name, f) => { (sseHandlers[name] ||= []).push(f); },
+  renderPanel: () => renderPanel(), renderHeader: () => renderHeader(),
 };
 document.addEventListener('DOMContentLoaded', boot);
 })();

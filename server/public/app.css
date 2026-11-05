@@ -249,3 +249,20 @@ dialog.search{width:min(640px,calc(100vw - 32px));margin-top:12vh}
   .pile{padding:3px 6px 3px 4px}
   .empty h1{font-size:24px}
 }
+
+/* ---------------- agents: connect dialog, request, delivery */
+.fl{list-style:none;padding:0;margin:16px 0 0;display:grid;gap:10px}
+.fl li{display:grid;grid-template-columns:20px 1fr;gap:10px;font-size:13px;color:var(--muted);line-height:1.5}
+.fl li svg{width:18px;height:18px;margin-top:1px}
+.fl .y svg{color:var(--success)}.fl .n svg{color:var(--faint)}
+.wl{display:flex;align-items:center;gap:10px;margin-top:16px;padding:10px 12px;border-radius:10px;background:var(--side);font-size:13px;color:var(--muted);flex-wrap:wrap}
+.digits{display:flex;gap:8px;justify-content:center;margin:10px 0 18px}
+.digits b{font:500 34px/1 var(--font-mono);letter-spacing:.08em;padding:12px 16px;border-radius:12px;background:var(--side);border:1px solid var(--line)}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:8px 12px;font-size:13px;border-top:1px solid var(--line);padding-top:14px;margin:0}
+.kv dt{color:var(--faint)}.kv dd{margin:0;overflow-wrap:anywhere}
+.row.pend{background:var(--warning-soft)}
+.row.pend small{color:var(--warning)}
+.dv .dl::before{content:"○ ";}
+.dv .dl-received::before{content:"✓ ";color:var(--success)}
+.dv .dl-replied::before,.dv .dl-read::before{content:"✓✓ ";color:var(--success)}
+@media (max-width:860px){.kv{grid-template-columns:1fr;gap:2px}.kv dd{margin-bottom:8px}}

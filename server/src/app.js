@@ -19,7 +19,7 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 's
 function createApp(config) {
   const db = open(config.dbFile);
   const auth = makeAuth({ db, config });
-  const hooks = { onMessage: [] };        // later pieces (agents' inboxes) subscribe here
+  const hooks = { onMessage: [], afterMessage: [], decorate: [], onMemberRemove: [], onRoomDelete: [] };   // agents plug in here
 
   // ---------------------------------------------------------------- live updates (SSE per person)
   const streams = new Map();              // user id -> Set<res>
@@ -47,8 +47,10 @@ function createApp(config) {
   }
   let describeAgent = null;
   function messageView(m) {
-    return { id: m.id, room: m.room_id, kind: m.kind, text: m.text, at: m.created_at, author: author(m.author_kind, m.author_id),
+    const v = { id: m.id, room: m.room_id, kind: m.kind, text: m.text, at: m.created_at, author: author(m.author_kind, m.author_id),
       mentions: db.all('SELECT target FROM mentions WHERE message_id = ?', m.id).map(r => r.target) };
+    for (const d of hooks.decorate) d(v, m);
+    return v;
   }
   function membership(roomId, userId) { return db.get('SELECT role, last_read_id FROM members WHERE room_id = ? AND user_id = ?', roomId, userId); }
   function needMember(roomId, user) {
@@ -87,6 +89,7 @@ function createApp(config) {
     });
     const view = messageView(row);
     push(memberIds(roomId), 'message', view);
+    for (const h of hooks.afterMessage) h(row, targets);
     return { message: view, duplicate: false };
   }
   let validTargets = roomId => db.all('SELECT user_id FROM members WHERE room_id = ?', roomId).map(r => `u:${r.user_id}`);
@@ -149,7 +152,7 @@ function createApp(config) {
 
   const routes = [];                       // [method, regex, handler(ctx)]
   const route = (method, re, fn) => routes.push([method, re, fn]);
-  const ctxApi = { db, auth, config, push, postMessage, event, membership, needMember, author, authorCache, roomMembersView, memberIds, route, hooks, send, page, userView,
+  const ctxApi = { db, auth, config, push, messageView, readJSON, HttpError, postMessage, event, membership, needMember, author, authorCache, roomMembersView, memberIds, route, hooks, send, page, userView,
     setValidTargets: f => { validTargets = f; }, getValidTargets: () => validTargets, setDescribeAgent: f => { describeAgent = f; }, streams };
 
   // ---------------------------------------------------------------- routes: auth
@@ -343,7 +346,7 @@ function createApp(config) {
       for (const [method, re, fn] of routes) {
         if (method !== req.method) continue;
         const m = p.match(re); if (!m) continue;
-        const isApi = p.startsWith('/api/') && !p.startsWith('/api/agent/') && !p.startsWith('/api/pair');
+        const isApi = p.startsWith('/api/') && !p.startsWith('/api/agent/') && p !== '/api/pair' && !p.startsWith('/api/pair/');
         if (isApi && !s) throw new HttpError(401, 'Потрібен вхід.');
         if (isApi && req.method !== 'GET') auth.checkCsrf(req, s);
         return await fn({ req, res, url, s, m });
@@ -359,6 +362,9 @@ function createApp(config) {
       if (!res.headersSent) send(res, 500, { error: 'Помилка сервера.' });
     }
   }
+
+  require('./agents').install(ctxApi);
+  require('./cli-dist').install(ctxApi);
 
   const server = http.createServer(handle);
   server.requestTimeout = 0;
