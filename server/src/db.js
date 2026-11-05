@@ -71,6 +71,9 @@ const MIGRATIONS = [
      target TEXT NOT NULL,
      PRIMARY KEY (message_id, target)
    );`,
+  // A retried "create room" with the same key returns the room made the first time.
+  `ALTER TABLE rooms ADD COLUMN create_key TEXT;
+   CREATE UNIQUE INDEX rooms_create_key ON rooms(owner_id, create_key) WHERE create_key IS NOT NULL;`,
 ];
 
 function open(file) {

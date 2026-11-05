@@ -104,18 +104,20 @@ function createApp(config) {
     const clean = line.replace(/@\S+(?: · \S+)?/g, '').replace(/[*`#>_]/g, '').trim() || 'Нова кімната';
     return clean.length > 60 ? clean.slice(0, 57).replace(/\s+\S*$/, '') + '…' : clean;
   }
-  function createRoom(user, { title, text }) {
+  function createRoom(user, { title, text, idem }) {
+    const key = typeof idem === 'string' && /^[\w-]{8,64}$/.test(idem) ? idem : null;
+    if (key) { const had = db.get('SELECT id FROM rooms WHERE owner_id = ? AND create_key = ?', user.id, key); if (had) return had.id; }
     text = String(text || '').trim();
     const t = String(title || '').trim().slice(0, 80) || (text ? titleFrom(text) : '');
     if (!t) throw new HttpError(400, 'Напиши, про що кімната.');
     if (text) { const s = findSecret(text); if (s) throw new HttpError(422, `Схоже, у повідомленні ${s}. Прибери його.`); }
     const id = randomId(12), now = Date.now();
     db.tx(() => {
-      db.run('INSERT INTO rooms (id, title, owner_id, created_at, last_message_at) VALUES (?,?,?,?,?)', id, t, user.id, now, now);
+      db.run('INSERT INTO rooms (id, title, owner_id, created_at, last_message_at, create_key) VALUES (?,?,?,?,?,?)', id, t, user.id, now, now, key);
       db.run('INSERT INTO members (room_id, user_id, role, added_at) VALUES (?,?,?,?)', id, user.id, 'owner', now);
     });
     event(id, 'Кімнату створено');
-    if (text) postMessage({ roomId: id, authorKind: 'human', authorId: user.id, text });
+    if (text) postMessage({ roomId: id, authorKind: 'human', authorId: user.id, text, idem: key });
     return id;
   }
 

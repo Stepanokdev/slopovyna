@@ -178,3 +178,14 @@ test('secrets are refused, the same idempotency key does not post twice', async 
   assert.equal(one.status, 201); assert.equal(two.status, 200); assert.equal(one.json.id, two.json.id);
   assert.equal((await a.call('POST', `/api/rooms/${id}/messages`, { text: 'x'.repeat(20001) })).status, 413);
 });
+
+test('creating a room twice with the same key returns the first room, no duplicate', async () => {
+  const a = await person(srv.base, 'idem-room');
+  const one = await a.call('POST', '/api/rooms', { text: 'одна кімната', idem: 'room-key-123' });
+  const two = await a.call('POST', '/api/rooms', { text: 'одна кімната', idem: 'room-key-123' });
+  assert.equal(one.json.id, two.json.id);
+  const rooms = (await a.call('GET', '/api/rooms')).json.rooms.filter(r => r.title === 'одна кімната');
+  assert.equal(rooms.length, 1);
+  const msgs = (await a.call('GET', `/api/rooms/${one.json.id}/messages`)).json.messages.filter(m => m.kind === 'message');
+  assert.equal(msgs.length, 1);
+});

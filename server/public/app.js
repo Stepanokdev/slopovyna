@@ -247,8 +247,8 @@ function renderNew() {
       <div class="sugg">Агента й колег підключиш у кімнаті, щойно вона з'явиться.</div>
     </div></div>`;
   $('.sugg').classList.add('foot');
-  bindComposer({ onSend: async (text) => {
-    const r = await api('POST', '/api/rooms', { text });
+  bindComposer({ onSend: async (text, _m, _e, idem) => {
+    const r = await api('POST', '/api/rooms', { text, idem });
     await loadRooms(); nav(`/r/${r.id}`);
   }, key: 'new' });
   $('#ta').focus();
@@ -428,23 +428,29 @@ function bindComposer({ onSend, key, mentions }) {
     pop.hidden = true; ta.focus(); ta.setSelectionRange(before.length, before.length);
     store.set(dkey, ta.value); sync();
   }
+  // One idempotency key per unsent draft. A retry of the same text reuses it (also after a reload),
+  // so a send whose response was lost cannot land twice; editing the text starts a new attempt.
+  const ikey = `slop.attempt.${key}`;
+  let busy = false;
   async function submit() {
-    if (!can()) return;
+    if (!can() || busy) return;
     const text = ta.value.trim();
     const ments = [...S.mentions].filter(id => { const p = memberById(id); return p && text.includes('@' + labelOf(p)); });
-    go.disabled = true; err.hidden = true;
+    let attempt = null; try { attempt = JSON.parse(store.get(ikey) || 'null'); } catch {}
+    if (!attempt || attempt.text !== text) { attempt = { text, idem: newKey() }; store.set(ikey, JSON.stringify(attempt)); }
+    busy = true; go.disabled = true; err.hidden = true;
     try {
-      await onSend(text, ments, composerHooks.collect());
-      ta.value = ''; store.set(dkey, null); S.mentions = new Set(); composerHooks.reset(); sync();
+      await onSend(text, ments, composerHooks.collect(), attempt.idem);
+      ta.value = ''; store.set(dkey, null); store.set(ikey, null); S.mentions = new Set(); composerHooks.reset();
     } catch (e) {
-      err.textContent = e.message; err.hidden = false; sync();
-    }
+      err.textContent = e.status ? e.message : 'Немає зв\'язку з сервером. Текст збережено, надішли ще раз.'; err.hidden = false;
+    } finally { busy = false; sync(); }
   }
   sync();
 }
 
-async function sendMessage(text, mentions, extra) {
-  const idem = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).replace(/-/g, '').slice(0, 32);
+const newKey = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')).replace(/-/g, '').slice(0, 32);
+async function sendMessage(text, mentions, extra, idem) {
   const tmpId = `p${idem}`;
   const view = { id: tmpId, room: S.room.id, kind: 'message', text: text || ' ', at: Date.now(), author: { ...S.me, id: myId() }, mentions };
   S.pending.set(tmpId, { view, id: null });
