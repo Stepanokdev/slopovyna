@@ -35,7 +35,7 @@ if [ "${1:-}" != --local ]; then
 fi
 
 need "tree: no keys" bash -c "! git grep -qIE 'BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}' -- . ':!server/test'"
-need "ops: no server address or key path" bash -c "! git grep -qIE 'https?://[a-z0-9.-]+\\.[a-z]{2,}|[0-9]{1,3}(\\.[0-9]{1,3}){3}|ssh_key' -- server/ops ':!server/ops/check-github.sh'"
+need "ops: no server address or key path" bash -c "! git grep -hIE 'https?://[a-z0-9.-]+\\.[a-z]{2,}|[0-9]{1,3}(\\.[0-9]{1,3}){3}|ssh_key' -- server/ops ':!server/ops/check-github.sh' | grep -vE 'https://(slop\\.example\\.com|your\\.host)'"
 need "history: no env, db or key files" bash -c "! git log --all --name-only --format= | grep -qiE '(^|/)\\.env\$|\\.db\$|secret\\.key\$|\\.pem\$|prod\\.env\$'"
 need "history: no secrets" bash -c "! git log --all -p | grep -E '^\\+' | grep -qE 'BEGIN [A-Z ]*PRIVATE KEY-----[A-Za-z0-9+/]|AKIA[0-9A-Z]{16}\\b|sk-ant-[A-Za-z0-9_-]{30,}|GITHUB_CLIENT_SECRET=[0-9a-f]{20}'"
 for f in server/ops/.prod.env .env server/.env x.pem data/slop.db secret.key; do need "gitignore: $f" git check-ignore "$f"; done
