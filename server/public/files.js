@@ -21,7 +21,14 @@ function idb() {
   });
 }
 async function idbGet(store, key) { try { const d = await idb(); return await new Promise(r => { const q = d.transaction(store).objectStore(store).get(key); q.onsuccess = () => r(q.result || null); q.onerror = () => r(null); }); } catch { return null; } }
-async function idbPut(store, key, val) { try { const d = await idb(); await new Promise(r => { const t = d.transaction(store, 'readwrite'); t.objectStore(store).put(val, key); t.oncomplete = r; t.onerror = r; }); } catch {} }
+// Resolves true only once the write is committed; quota errors, a blocked or private-mode store give false.
+async function idbPut(store, key, val) {
+  try {
+    const d = await idb();
+    return await new Promise(r => { const t = d.transaction(store, 'readwrite'); t.objectStore(store).put(val, key); t.oncomplete = () => r(true); t.onerror = () => r(false); t.onabort = () => r(false); });
+  } catch { return false; }
+}
+async function idbDel(store, key) { try { const d = await idb(); await new Promise(r => { const t = d.transaction(store, 'readwrite'); t.objectStore(store).delete(key); t.oncomplete = r; t.onerror = r; t.onabort = r; }); } catch {} }
 
 // ---------------------------------------------------------------- attaching
 let chips = [];                 // { key, file, state: 'uploading'|'ready'|'error', id, error }
@@ -48,6 +55,10 @@ async function upload(c) {
   c.state = 'uploading'; c.error = ''; renderChips();
   try {
     const buf = await c.file.arrayBuffer();
+    const noStorage = !S.room?.extra?.files?.storage;
+    // Without a bucket the file is handed out from this browser, so it must be safely kept here first.
+    const CANT_KEEP = 'Браузер не зміг зберегти файл (немає місця або приватний режим), тож інші його не отримають. Звільни місце або попроси власника кімнати підключити сховище.';
+    if (noStorage && !(await idbPut('own', `pending:${c.key}`, { blob: c.file, name: c.file.name }))) throw new Error(CANT_KEEP);
     const reg = await api('POST', `/api/rooms/${S.room.id}/attachments`, { name: c.file.name, size: c.file.size, sha256: await sha256(buf), mime: c.file.type || 'application/octet-stream' });
     if (reg.mode === 'storage') {
       let put;
@@ -55,11 +66,24 @@ async function upload(c) {
       if (!put.ok) throw new Error(`сховище відповіло ${put.status}`);
       await api('POST', `/api/rooms/${S.room.id}/attachments/${reg.id}/complete`, {});
     } else {
-      await idbPut('own', reg.id, { blob: c.file, name: c.file.name });
+      const kept = await idbPut('own', reg.id, { blob: c.file, name: c.file.name });
+      idbDel('own', `pending:${c.key}`);
+      if (!kept) throw new Error(CANT_KEEP);
     }
     c.id = reg.id; c.state = 'ready';
   } catch (e) { c.state = 'error'; c.error = e.message || 'не завантажилось'; }
   renderChips();
+}
+// #mn lives for the whole session while rooms come and go inside it: the drop zone is wired once.
+let dropBound = false;
+function bindDrop() {
+  if (dropBound) return;
+  const zone = $('#mn'); if (!zone) return;
+  dropBound = true;
+  const inRoom = () => !!(S.room && $('#cform') && $('#chips'));
+  zone.addEventListener('dragover', e => { if (inRoom() && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); zone.classList.add('drop'); } });
+  zone.addEventListener('dragleave', e => { if (e.target === zone || !zone.contains(e.relatedTarget)) zone.classList.remove('drop'); });
+  zone.addEventListener('drop', e => { zone.classList.remove('drop'); if (inRoom() && e.dataTransfer.files.length) { e.preventDefault(); add([...e.dataTransfer.files]); } });
 }
 actions['chip-rm'] = t => { chips = chips.filter(c => c.key !== t.dataset.key); renderChips(); };
 actions['chip-retry'] = t => { const c = chips.find(x => x.key === t.dataset.key); if (c) upload(c); };
@@ -72,10 +96,7 @@ window.Slop.setComposer({
     chips = chips.filter(c => c.room === S.room.id);
     $('#fin').addEventListener('change', e => { add([...e.target.files]); e.target.value = ''; });
     $('#ta').addEventListener('paste', e => { const f = [...(e.clipboardData?.files || [])]; if (f.length) { e.preventDefault(); add(f); } });
-    const zone = $('#mn');
-    zone.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); zone.classList.add('drop'); } });
-    zone.addEventListener('dragleave', e => { if (e.target === zone || !zone.contains(e.relatedTarget)) zone.classList.remove('drop'); });
-    zone.addEventListener('drop', e => { if (e.dataTransfer.files.length) { e.preventDefault(); zone.classList.remove('drop'); add([...e.dataTransfer.files]); } });
+    bindDrop();
     renderChips();
   },
   ready: () => !chips.some(c => c.state !== 'ready'),

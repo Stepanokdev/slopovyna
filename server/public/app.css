@@ -274,7 +274,8 @@ dialog.search{width:min(640px,calc(100vw - 32px));margin-top:12vh}
 .chip .cn{font-weight:600;min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip .cs{color:var(--faint);font-size:12px;min-width:0}
 .chip.error{border-color:var(--error);background:var(--error-soft)}
-.chip.error .cs{color:var(--error)}
+.chip.error{flex-wrap:wrap}
+.chip.error .cs{color:var(--error);order:5;flex-basis:100%;padding:0 4px 2px 24px;line-height:1.45}
 .chip button{border:0;background:none;cursor:pointer;font-size:12px;font-weight:600;color:var(--ink);padding:4px 6px;border-radius:6px}
 .chip button:hover{background:var(--hover)}
 .chip button.x{width:24px;height:24px;padding:0;display:grid;place-items:center}
