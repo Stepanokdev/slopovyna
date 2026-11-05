@@ -388,15 +388,18 @@ function composerHtml(ph) {
 let composerHooks = { slot: () => '', bind: () => {}, ready: () => true, collect: () => ({}), reset: () => {} };
 function bindComposer({ onSend, key, mentions }) {
   const ta = $('#ta'), go = $('#go'), pop = $('#pop'), err = $('#cerr');
-  const dkey = `slop.draft.${key}`;
-  ta.value = store.get(dkey) || '';
-  S.mentions = new Set();
+  const D = window.SlopDraft;
+  const lbl = id => { const p = memberById(id); return p ? labelOf(p) : null; };
+  const saved = D.load(store, key);
+  ta.value = saved.text;
+  S.mentions = new Set(D.liveMentions(saved.text, saved.mentions, lbl));
+  const persist = () => D.save(store, key, ta.value, D.liveMentions(ta.value, [...S.mentions], lbl));
   const can = () => !!(ta.value.trim() || composerHooks.collect().hasFiles) && composerHooks.ready();
   const sync = () => { go.disabled = !can(); grow(); };
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 220) + 'px'; const cmp = $('.cmp'); if (cmp) document.documentElement.style.setProperty('--compH', cmp.offsetHeight + 'px'); };
   $('#attachSlot').innerHTML = mentions ? composerHooks.slot() : '';
   if (mentions) composerHooks.bind(sync);
-  ta.addEventListener('input', () => { store.set(dkey, ta.value || null); err.hidden = true; sync(); if (mentions) showPop(); });
+  ta.addEventListener('input', () => { persist(); err.hidden = true; sync(); if (mentions) showPop(); });
   ta.addEventListener('keydown', e => {
     if (!pop.hidden && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
       const o = [...pop.querySelectorAll('button')]; let k = o.findIndex(x => x.getAttribute('aria-selected') === 'true');
@@ -426,22 +429,20 @@ function bindComposer({ onSend, key, mentions }) {
     const before = ta.value.slice(0, pos).replace(/@([^\s@]{0,30})$/, '@' + labelOf(p) + ' ');
     ta.value = before + ta.value.slice(pos); S.mentions.add(id);
     pop.hidden = true; ta.focus(); ta.setSelectionRange(before.length, before.length);
-    store.set(dkey, ta.value); sync();
+    persist(); sync();
   }
-  // One idempotency key per unsent draft. A retry of the same text reuses it (also after a reload),
-  // so a send whose response was lost cannot land twice; editing the text starts a new attempt.
-  const ikey = `slop.attempt.${key}`;
   let busy = false;
   async function submit() {
     if (!can() || busy) return;
-    const text = ta.value.trim();
-    const ments = [...S.mentions].filter(id => { const p = memberById(id); return p && text.includes('@' + labelOf(p)); });
-    let attempt = null; try { attempt = JSON.parse(store.get(ikey) || 'null'); } catch {}
-    if (!attempt || attempt.text !== text) { attempt = { text, idem: newKey() }; store.set(ikey, JSON.stringify(attempt)); }
+    const raw = ta.value, text = raw.trim();
+    const ments = D.liveMentions(text, [...S.mentions], lbl);
+    const idem = D.attempt(store, key, text, newKey);
     busy = true; go.disabled = true; err.hidden = true;
     try {
-      await onSend(text, ments, composerHooks.collect(), attempt.idem);
-      ta.value = ''; store.set(dkey, null); store.set(ikey, null); S.mentions = new Set(); composerHooks.reset();
+      await onSend(text, ments, composerHooks.collect(), idem);
+      // Keep whatever was typed while the message was on its way.
+      const left = D.afterSend(store, key, raw, ta.value, [...S.mentions], lbl);
+      ta.value = left.text; S.mentions = new Set(left.mentions); composerHooks.reset();
     } catch (e) {
       err.textContent = e.status ? e.message : 'Немає зв\'язку з сервером. Текст збережено, надішли ще раз.'; err.hidden = false;
     } finally { busy = false; sync(); }
