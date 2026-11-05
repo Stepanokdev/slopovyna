@@ -2,12 +2,12 @@
 // messages, handing out one's own files when the room has no bucket, and the room's bucket settings.
 'use strict';
 (() => {
-const { S, api, esc, toast, I, $, actions, refreshRoom, renderFeed } = window.Slop;
+const { S, api, esc, toast, I, $, actions, refreshRoom, renderFeed, T } = window.Slop;
 const CLIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>';
 const DOC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
 const RASTER = { 'image/png': [0x89, 0x50, 0x4e, 0x47], 'image/jpeg': [0xff, 0xd8, 0xff], 'image/gif': [0x47, 0x49, 0x46, 0x38], 'image/webp': [0x52, 0x49, 0x46, 0x46] };
 const sniff = b => { for (const [t, sig] of Object.entries(RASTER)) if (sig.every((x, i) => b[i] === x) && (t !== 'image/webp' || String.fromCharCode(...b.slice(8, 12)) === 'WEBP')) return t; return null; };
-const size = n => n < 1024 ? `${n} Б` : n < 1048576 ? `${Math.round(n / 1024)} КБ` : `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} МБ`;
+const size = n => n < 1024 ? T('f.b', { n }) : n < 1048576 ? T('f.kb', { n: Math.round(n / 1024) }) : T('f.mb', { n: (n / 1048576).toFixed(n < 10485760 ? 1 : 0) });
 const hex = buf => Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
 const sha256 = async buf => hex(await crypto.subtle.digest('SHA-256', buf));
 
@@ -39,9 +39,9 @@ function renderChips() {
   const mine = S.room && $('#attachSlot')?.children.length ? here() : [];
   el.className = mine.length ? 'chips' : '';
   el.innerHTML = mine.map(c => `<span class="chip ${c.state}" data-key="${c.key}">${c.state === 'uploading' ? '<span class="spin" aria-hidden="true"></span>' : DOC}
-      <span class="cn">${esc(c.file.name)}</span><span class="cs">${c.state === 'error' ? esc(c.error) : c.state === 'uploading' ? 'завантажую…' : size(c.file.size)}</span>
-      ${c.state === 'error' ? `<button type="button" data-act="chip-retry" data-key="${c.key}">Повторити</button>` : ''}
-      <button type="button" class="x" data-act="chip-rm" data-key="${c.key}" aria-label="Прибрати ${esc(c.file.name)}">${I.x}</button></span>`).join('');
+      <span class="cn">${esc(c.file.name)}</span><span class="cs">${c.state === 'error' ? esc(c.error) : c.state === 'uploading' ? T('f.uploading') : size(c.file.size)}</span>
+      ${c.state === 'error' ? `<button type="button" data-act="chip-retry" data-key="${c.key}">${T('g.retry')}</button>` : ''}
+      <button type="button" class="x" data-act="chip-rm" data-key="${c.key}" aria-label="${esc(T('f.removeName', { name: c.file.name }))}">${I.x}</button></span>`).join('');
   syncComposer();
 }
 function add(files) {
@@ -60,13 +60,13 @@ async function upload(c) {
     const buf = await c.file.arrayBuffer();
     const roomId = c.room;
     // Without a bucket the file is handed out from this browser, so it must be safely kept here first.
-    const CANT_KEEP = 'Браузер не зміг зберегти файл (немає місця або приватний режим), тож інші його не отримають. Звільни місце або попроси власника кімнати підключити сховище.';
+    const CANT_KEEP = T('f.cantKeep');
     if (c.viaBrowser && !(await idbPut('own', `pending:${c.key}`, { blob: c.file, name: c.file.name }))) throw new Error(CANT_KEEP);
     const reg = await api('POST', `/api/rooms/${roomId}/attachments`, { name: c.file.name, size: c.file.size, sha256: await sha256(buf), mime: c.file.type || 'application/octet-stream' });
     if (reg.mode === 'storage') {
       let put;
-      try { put = await fetch(reg.put_url, { method: 'PUT', body: c.file }); } catch { throw new Error('сховище кімнати не прийняло файл (CORS?)'); }
-      if (!put.ok) throw new Error(`сховище відповіло ${put.status}`);
+      try { put = await fetch(reg.put_url, { method: 'PUT', body: c.file }); } catch { throw new Error(T('f.cors')); }
+      if (!put.ok) throw new Error(T('f.putStatus', { status: put.status }));
       await api('POST', `/api/rooms/${roomId}/attachments/${reg.id}/complete`, {});
     } else {
       // the room may have lost its bucket meanwhile; either way the file must be kept here now
@@ -75,7 +75,7 @@ async function upload(c) {
       if (!kept) throw new Error(CANT_KEEP);
     }
     c.id = reg.id; c.state = 'ready';
-  } catch (e) { c.state = 'error'; c.error = e.message || 'не завантажилось'; }
+  } catch (e) { c.state = 'error'; c.error = e.message || T('f.failed'); }
   renderChips();
 }
 // #mn lives for the whole session while rooms come and go inside it: the drop zone is wired once.
@@ -84,6 +84,8 @@ function bindDrop() {
   if (dropBound) return;
   const zone = $('#mn'); if (!zone) return;
   dropBound = true;
+  zone.dataset.drop = T('f.drop');
+  window.SlopI18n.onChange(() => { zone.dataset.drop = T('f.drop'); });
   const inRoom = () => !!(S.room && $('#cform') && $('#chips'));
   zone.addEventListener('dragover', e => { if (inRoom() && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); zone.classList.add('drop'); } });
   zone.addEventListener('dragleave', e => { if (e.target === zone || !zone.contains(e.relatedTarget)) zone.classList.remove('drop'); });
@@ -94,7 +96,7 @@ actions['chip-retry'] = t => { const c = chips.find(x => x.key === t.dataset.key
 actions.attach = () => $('#fin').click();
 
 window.Slop.setComposer({
-  slot: () => `<button type="button" class="rb" data-act="attach" aria-label="Прикріпити файл або скриншот" title="Файл або скриншот">${CLIP}</button><input type="file" id="fin" multiple hidden>`,
+  slot: () => `<button type="button" class="rb" data-act="attach" aria-label="${T('f.attach')}" title="${T('f.attachShort')}">${CLIP}</button><input type="file" id="fin" multiple hidden>`,
   bind: sync => {
     syncComposer = sync;
     $('#fin').addEventListener('change', e => { add([...e.target.files]); e.target.value = ''; });
@@ -112,12 +114,12 @@ window.Slop.setComposer({
 const att = new Map();          // id -> { state, url, error }
 function fileCard(f, m) {
   const a = att.get(f.id) || {};
-  const note = a.state === 'loading' ? 'відкриваю…' : a.error ? a.error : `${size(f.size)}${f.mode === 'source' ? ' · у автора' : ''}`;
-  if (f.inline && a.state === 'ready') return `<button class="att-img" data-act="att-view" data-att="${f.id}" aria-label="Відкрити ${esc(f.name)}"><img src="${a.url}" alt="${esc(f.name)}"></button>`;
+  const note = a.state === 'loading' ? T('f.opening') : a.error ? a.error : `${size(f.size)}${f.mode === 'source' ? T('f.atAuthor') : ''}`;
+  if (f.inline && a.state === 'ready') return `<button class="att-img" data-act="att-view" data-att="${f.id}" aria-label="${esc(T('f.open', { name: f.name }))}"><img src="${a.url}" alt="${esc(f.name)}"></button>`;
   if (f.inline && !a.error) return `<div class="att-img ph" data-att="${f.id}" data-att-auto="${f.id}" data-room="${esc(m.room)}"><span class="spin" aria-hidden="true"></span><span>${esc(f.name)}</span></div>`;
   const off = a.error ? ' off' : '';
   return `<div class="fc${off}" data-att="${f.id}"><span class="ic">${DOC}</span><span class="fm"><b>${esc(f.name)}</b><small>${esc(note)}</small></span>
-    <button class="btn sm" data-act="att-dl" data-att="${f.id}" data-room="${esc(m.room)}">${a.error ? 'Ще раз' : 'Завантажити'}</button></div>`;
+    <button class="btn sm" data-act="att-dl" data-att="${f.id}" data-room="${esc(m.room)}">${a.error ? T('f.again') : T('f.download')}</button></div>`;
 }
 window.Slop.prependExtras(m => m.files && m.files.length ? `<div class="att">${m.files.map(f => fileCard(f, m)).join('')}</div>` : '');
 
@@ -137,17 +139,16 @@ async function load(roomId, f) {
   else {
     let r;
     try { r = await fetch(`/api/rooms/${roomId}/attachments/${f.id}`, { credentials: 'same-origin' }); }
-    catch { att.set(f.id, { state: 'error', error: 'Не вдалося завантажити: немає зв\'язку зі сховищем.' }); rerender(f.id); return att.get(f.id); }
+    catch { att.set(f.id, { state: 'error', error: T('f.noLink') }); rerender(f.id); return att.get(f.id); }
     if (!r.ok) {
       let j = null; try { j = await r.json(); } catch {}
-      const msg = j?.code === 'offline' ? `Файл зараз недоступний: ${j.error.replace(/^Файл зараз недоступний: /, '')}`
-        : j?.code === 'budget' ? 'Ліміт передачі файлів через сервер на цей місяць вичерпано. Власник кімнати може підключити своє сховище.'
-        : (j && j.error) || `Помилка ${r.status}`;
+      // the server already answers in the interface language; budget gets the shorter in-place wording
+      const msg = j?.code === 'budget' ? T('f.budget') : (j && j.error) || T('g.error', { status: r.status });
       att.set(f.id, { state: 'error', error: msg }); rerender(f.id); return att.get(f.id);
     }
-    try { buf = await r.arrayBuffer(); } catch { att.set(f.id, { state: 'error', error: 'Передачу перервано.' }); rerender(f.id); return att.get(f.id); }
+    try { buf = await r.arrayBuffer(); } catch { att.set(f.id, { state: 'error', error: T('f.interrupted') }); rerender(f.id); return att.get(f.id); }
   }
-  if (buf.byteLength !== f.size || (await sha256(buf)) !== f.sha256) { att.set(f.id, { state: 'error', error: 'Файл не збігся з тим, що надіслали. Не показуємо.' }); rerender(f.id); return att.get(f.id); }
+  if (buf.byteLength !== f.size || (await sha256(buf)) !== f.sha256) { att.set(f.id, { state: 'error', error: T('f.mismatch') }); rerender(f.id); return att.get(f.id); }
   const real = sniff(new Uint8Array(buf.slice(0, 16)));
   if (!local) idbPut('seen', f.id, { blob: new Blob([buf]), name: f.name });
   if (f.inline && real) return done(buf, real);
@@ -172,8 +173,8 @@ actions['att-dl'] = async t => {
 actions['att-view'] = t => {
   const x = meta(t.dataset.att), v = att.get(t.dataset.att); if (!x || !v) return;
   const d = $('#dlg');
-  d.innerHTML = `<div class="dh"><h2>${esc(x.f.name)}</h2><button class="ib" data-close aria-label="Закрити">${I.x}</button></div><div class="db lb"><img src="${v.url}" alt="${esc(x.f.name)}"><p class="hint">${esc(size(x.f.size))} · sha256 збігся${x.f.mode === 'storage' ? ' · зі сховища кімнати' : ' · від автора через сервер'}</p></div>
-    <div class="df"><button class="btn" data-act="att-dl" data-att="${x.f.id}" data-room="${esc(x.m.room)}">Завантажити</button></div>`;
+  d.innerHTML = `<div class="dh"><h2>${esc(x.f.name)}</h2><button class="ib" data-close aria-label="${T('g.close')}">${I.x}</button></div><div class="db lb"><img src="${v.url}" alt="${esc(x.f.name)}"><p class="hint">${esc(T('f.viewHint', { size: size(x.f.size) }))}${x.f.mode === 'storage' ? T('f.viewStorage') : T('f.viewRelay')}</p></div>
+    <div class="df"><button class="btn" data-act="att-dl" data-att="${x.f.id}" data-room="${esc(x.m.room)}">${T('f.download')}</button></div>`;
   d.classList.add('wide'); d.showModal(); d.addEventListener('close', () => d.classList.remove('wide'), { once: true });
 };
 
@@ -190,12 +191,13 @@ window.Slop.setPanel({
   files: () => {
     const fi = S.room?.extra?.files; if (!fi) return '';
     const owner = S.room.role === 'owner', st = fi.storage, used = fi.relay.used, pct = Math.min(100, Math.round(used / fi.relay.budget * 100));
-    return `<h3>Файли</h3><div class="store">
-      ${st ? `<b>Своє сховище підключене</b><span>${esc(st.bucket)} · ${esc(new URL(st.endpoint).host)}. Файли йдуть напряму в бакет і з нього, сервер їх не бачить.</span>`
-           : `<b>Своє сховище не підключене</b><span>Файл іде прямо з машини автора через сервер і відкривається, поки автор у мережі. На сервері файли не зберігаються.</span>`}
-      <progress class="meter" max="100" value="${pct}" aria-label="Через сервер цього місяця ${size(used)} з ${size(fi.relay.budget)}"></progress>
-      <small>Через сервер цього місяця: ${size(used)} з ${size(fi.relay.budget)}</small>
-      ${owner ? `<span class="row-btns">${st ? `<button class="btn sm" data-act="storage">Змінити</button><button class="btn sm danger" data-act="storage-off">Відключити</button>` : `<button class="btn sm" data-act="storage">Підключити своє сховище</button>`}</span>` : ''}
+    const relay = T('f.relay', { used: size(used), budget: size(fi.relay.budget) });
+    return `<h3>${T('f.files')}</h3><div class="store">
+      ${st ? `<b>${T('f.stOn')}</b><span>${esc(T('f.stOnText', { bucket: st.bucket, host: new URL(st.endpoint).host }))}</span>`
+           : `<b>${T('f.stOff')}</b><span>${T('f.stOffText')}</span>`}
+      <progress class="meter" max="100" value="${pct}" aria-label="${esc(relay)}"></progress>
+      <small>${esc(relay)}</small>
+      ${owner ? `<span class="row-btns">${st ? `<button class="btn sm" data-act="storage">${T('f.change')}</button><button class="btn sm danger" data-act="storage-off">${T('f.disconnect')}</button>` : `<button class="btn sm" data-act="storage">${T('f.connect')}</button>`}</span>` : ''}
     </div>`;
   },
 });
@@ -203,29 +205,29 @@ window.Slop.setPanel({
 const CORS = origin => JSON.stringify([{ AllowedOrigins: [origin], AllowedMethods: ['GET', 'PUT', 'HEAD'], AllowedHeaders: ['*'], ExposeHeaders: ['ETag'], MaxAgeSeconds: 3600 }], null, 2);
 actions.storage = () => {
   const d = $('#dlg');
-  d.innerHTML = `<div class="dh"><h2>Своє сховище для кімнати</h2><button class="ib" data-close aria-label="Закрити">${I.x}</button></div>
-  <form class="db" id="stf"><p>Файли кімнати житимуть у твоєму бакеті, а не на сервері й не на машинах учасників, і відкриватимуться, навіть коли автор офлайн. Браузер і агенти качають їх напряму, сервер видає лише посилання на 5 хвилин учасникам кімнати.</p>
-    <div class="fld"><label for="ep">Адреса (endpoint)</label><div class="inp plain"><input id="ep" required spellcheck="false" placeholder="https://<account>.r2.cloudflarestorage.com"></div></div>
-    <div class="fld2"><div class="fld"><label for="bk">Бакет</label><div class="inp plain"><input id="bk" required spellcheck="false" placeholder="slopovyna-files"></div></div>
-      <div class="fld"><label for="rg">Регіон</label><div class="inp plain"><input id="rg" spellcheck="false" placeholder="auto"></div></div></div>
+  d.innerHTML = `<div class="dh"><h2>${T('f.dTitle')}</h2><button class="ib" data-close aria-label="${T('g.close')}">${I.x}</button></div>
+  <form class="db" id="stf"><p>${T('f.dLead')}</p>
+    <div class="fld"><label for="ep">${T('f.endpoint')}</label><div class="inp plain"><input id="ep" required spellcheck="false" placeholder="https://<account>.r2.cloudflarestorage.com"></div></div>
+    <div class="fld2"><div class="fld"><label for="bk">${T('f.bucket')}</label><div class="inp plain"><input id="bk" required spellcheck="false" placeholder="slopovyna-files"></div></div>
+      <div class="fld"><label for="rg">${T('f.region')}</label><div class="inp plain"><input id="rg" spellcheck="false" placeholder="auto"></div></div></div>
     <div class="fld"><label for="ak">Access Key ID</label><div class="inp plain"><input id="ak" required spellcheck="false" autocomplete="off"></div></div>
     <div class="fld"><label for="sk">Secret Access Key</label><div class="inp plain"><input id="sk" type="password" required autocomplete="off"></div>
-      <div class="hint">Дай ключу права лише на цей бакет. Ключ шифрується на сервері й нікому не показується. Якщо видалиш бакет або ключ, файли зникнуть з кімнати.</div></div>
+      <div class="hint">${T('f.keyHint')}</div></div>
     <div id="sterr" class="hint err" role="alert"></div>
-    <div class="df flat"><button type="button" class="btn" data-close>Скасувати</button><button class="btn primary" id="stgo">Перевірити й підключити</button></div></form>`;
+    <div class="df flat"><button type="button" class="btn" data-close>${T('g.cancel')}</button><button class="btn primary" id="stgo">${T('f.check')}</button></div></form>`;
   d.showModal();
   $('#stf').onsubmit = async e => {
     e.preventDefault();
-    const go = $('#stgo'); go.disabled = true; go.textContent = 'Перевіряю…'; $('#sterr').textContent = '';
+    const go = $('#stgo'); go.disabled = true; go.textContent = T('f.checking'); $('#sterr').textContent = '';
     try {
       await api('PUT', `/api/rooms/${S.room.id}/storage`, { endpoint: $('#ep').value, bucket: $('#bk').value, region: $('#rg').value, access_key_id: $('#ak').value, secret_access_key: $('#sk').value });
       const corsOk = await probeCors();
-      d.innerHTML = `<div class="dh"><h2>${corsOk ? 'Сховище підключено' : 'Ключ працює, але браузер не пускає'}</h2><button class="ib" data-close aria-label="Закрити">${I.x}</button></div>
-        <div class="db">${corsOk ? '<p>Нові файли кімнати підуть у твій бакет. Старі лишаються там, де були.</p>'
-          : `<p>Сервер записав і прочитав пробний файл, але браузер не може завантажувати в бакет: потрібне правило CORS. У Cloudflare R2: бакет → Settings → CORS Policy, встав:</p><div class="cp"><code class="pre">${esc(CORS(location.origin))}</code><button class="btn sm" data-copytext="${esc(CORS(location.origin))}">Копіювати</button></div><p>Агенти вже можуть завантажувати, браузер — після цього правила.</p>`}</div>
-        <div class="df"><button class="btn primary" data-close>Готово</button></div>`;
+      d.innerHTML = `<div class="dh"><h2>${corsOk ? T('f.okTitle') : T('f.badCorsTitle')}</h2><button class="ib" data-close aria-label="${T('g.close')}">${I.x}</button></div>
+        <div class="db">${corsOk ? `<p>${T('f.okText')}</p>`
+          : `<p>${T('f.corsText')}</p><div class="cp"><code class="pre">${esc(CORS(location.origin))}</code><button class="btn sm" data-copytext="${esc(CORS(location.origin))}">${T('g.copy')}</button></div><p>${T('f.corsAfter')}</p>`}</div>
+        <div class="df"><button class="btn primary" data-close>${T('g.done')}</button></div>`;
       refreshRoom();
-    } catch (err) { $('#sterr').textContent = err.message; go.disabled = false; go.textContent = 'Перевірити й підключити'; }
+    } catch (err) { $('#sterr').textContent = err.message; go.disabled = false; go.textContent = T('f.check'); }
   };
 };
 async function probeCors() {
@@ -238,7 +240,7 @@ async function probeCors() {
   } catch { return false; }
 }
 actions['storage-off'] = async () => {
-  if (!confirm('Відключити сховище? Файли, що лежать у ньому, перестануть відкриватися в кімнаті. Сам бакет і файли в ньому лишаться.')) return;
+  if (!confirm(T('f.offQ'))) return;
   await api('DELETE', `/api/rooms/${S.room.id}/storage`); refreshRoom();
 };
 })();

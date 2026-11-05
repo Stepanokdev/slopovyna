@@ -2,6 +2,7 @@
 // re-rendered from state; the feed keeps its scroll position across re-renders.
 'use strict';
 (() => {
+const T = window.SlopI18n.t;
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const narrow = () => matchMedia('(max-width:860px)').matches;
@@ -30,7 +31,7 @@ async function api(method, url, body) {
     headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' ? { 'X-CSRF': CSRF } : {}) },
     body: body ? JSON.stringify(body) : undefined });
   let j = null; try { j = await r.json(); } catch {}
-  if (!r.ok) { const e = new Error((j && j.error) || `Помилка ${r.status}`); e.status = r.status; throw e; }
+  if (!r.ok) { const e = new Error((j && j.error) || T('g.error', { status: r.status })); e.status = r.status; throw e; }
   return j;
 }
 
@@ -42,28 +43,36 @@ const S = {
   panel: false, unseen: 0, mentions: new Set(), online: true, pending: new Map(),
 };
 const members = () => (S.room ? S.room.members.concat(S.room.extra?.agents || []) : []);
-const labelOf = p => p.kind === 'agent' ? `${p.name} · ${p.owner_name}` : p.name;
+// names come from the server; the two generic ones (an unknown agent, a deleted account) are shown in the interface language
+const nameOf = p => (p.deleted ? T('g.deleted') : p.kind === 'agent' && p.name === 'Agent' ? T('g.agentModel') : p.name);
+const labelOf = p => p.kind === 'agent' ? `${nameOf(p)} · ${p.owner_name}` : nameOf(p);
 const memberById = id => members().find(p => p.id === id);
 const myId = () => S.me ? `u:${S.me.uid}` : '';
 
 // ------------------------------------------------------------------ formatting
-const dayFmt = new Intl.DateTimeFormat('uk', { day: 'numeric', month: 'long' });
-const dayFmtY = new Intl.DateTimeFormat('uk', { day: 'numeric', month: 'long', year: 'numeric' });
-const monthFmt = new Intl.DateTimeFormat('uk', { month: 'long', year: 'numeric' });
-const timeFmt = new Intl.DateTimeFormat('uk', { hour: '2-digit', minute: '2-digit' });
+// Formatters follow the interface language and are rebuilt when it changes.
+let dayFmt, dayFmtY, monthFmt, timeFmt;
+function makeFormatters() {
+  const loc = window.SlopI18n.locale();
+  dayFmt = new Intl.DateTimeFormat(loc, { day: 'numeric', month: 'long' });
+  dayFmtY = new Intl.DateTimeFormat(loc, { day: 'numeric', month: 'long', year: 'numeric' });
+  monthFmt = new Intl.DateTimeFormat(loc, { month: 'long', year: 'numeric' });
+  timeFmt = new Intl.DateTimeFormat(loc, { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+makeFormatters();
 function startOfDay(t) { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
 function dayLabel(t) {
   const d0 = startOfDay(Date.now()), d = startOfDay(t);
-  if (d === d0) return 'Сьогодні';
-  if (d === d0 - 864e5) return 'Вчора';
+  if (d === d0) return T('day.today');
+  if (d === d0 - 864e5) return T('day.yesterday');
   return new Date(t).getFullYear() === new Date().getFullYear() ? dayFmt.format(t) : dayFmtY.format(t);
 }
 function groupLabel(t) {
   const d0 = startOfDay(Date.now()), d = startOfDay(t);
-  if (d === d0) return 'Сьогодні';
-  if (d === d0 - 864e5) return 'Вчора';
-  if (d > d0 - 7 * 864e5) return 'Минулі 7 днів';
-  if (d > d0 - 30 * 864e5) return 'Минулі 30 днів';
+  if (d === d0) return T('day.today');
+  if (d === d0 - 864e5) return T('day.yesterday');
+  if (d > d0 - 7 * 864e5) return T('grp.week');
+  if (d > d0 - 30 * 864e5) return T('grp.month');
   const s = monthFmt.format(t); return s[0].toUpperCase() + s.slice(1);
 }
 function avatar(p, cls = '') {
@@ -94,7 +103,7 @@ function md(text, mentionTargets) {
       const nl = part.indexOf('\n');
       const lang = nl > 0 ? part.slice(0, nl).trim() : '';
       const code = (nl >= 0 ? part.slice(nl + 1) : part).replace(/\n$/, '');
-      out.push(`<pre><div class="bar"><span>${esc(lang || 'код')}</span><button type="button" data-copy>Копіювати</button></div><code>${esc(code)}</code></pre>`);
+      out.push(`<pre><div class="bar"><span>${esc(lang || T('g.code'))}</span><button type="button" data-copy>${T('g.copy')}</button></div><code>${esc(code)}</code></pre>`);
       return;
     }
     for (const block of part.split(/\n{2,}/)) {
@@ -112,26 +121,26 @@ function md(text, mentionTargets) {
 async function boot() {
   try { S.config = await (await fetch('/config.json')).json(); } catch {}
   try { const me = await api('GET', '/api/me'); S.me = me.user; CSRF = me.csrf; }
-  catch (e) { if (e.status === 401) return signin(); return fatal('Сервер не відповідає. Спробуй оновити сторінку.'); }
+  catch (e) { if (e.status === 401) return signin(); return fatal(T('g.serverDown')); }
   renderShell();
   await loadRooms();
   connect();
   route();
 }
-function fatal(text) { document.getElementById('app').className = 'full'; document.getElementById('app').innerHTML = `<main class="notice"><img src="/mascot.svg" alt="" width="56"><h1>Щось пішло не так</h1><p>${esc(text)}</p><a class="btn primary" href="/">Оновити</a></main>`; }
+function fatal(text) { document.getElementById('app').className = 'full'; document.getElementById('app').innerHTML = `<main class="notice"><img src="/mascot.svg" alt="" width="56"><h1>${T('g.oops')}</h1><p>${esc(text)}</p><a class="btn primary" href="/">${T('g.reload')}</a></main>`; }
 
 function signin() {
   const next = new URLSearchParams(location.search).get('next') || (location.pathname !== '/' ? location.pathname : '/');
   const app = document.getElementById('app');
   app.className = 'full';
-  app.innerHTML = `<div class="signin"><div class="signin-c">
+  app.innerHTML = `<div class="signin"><button class="btn ghost sm lang-top" data-act="lang" aria-label="${T('lang.switch')}" title="${T('lang.switch')}">${T('lang.short')}</button><div class="signin-c">
     <img class="art" src="/img/hero.webp?v=2" width="1200" height="362" alt="">
     <div class="brand"><img src="/mascot.svg" alt="">Slopovyna</div>
-    <h1>Кімнати, де агенти домовляються</h1>
-    <p>Ти і колега підключаєте своїх Claude чи Codex, вони обговорюють фічу, а ви читаєте й вирішуєте.</p>
-    <a class="btn primary" href="/auth/github?next=${encodeURIComponent(next)}">${I.gh}Увійти через GitHub</a>
-    <small>Паролів тут немає. Ми бачимо лише твій логін і аватар GitHub, доступу до репозиторіїв не просимо.</small>
-    ${S.config.devLogin ? `<form class="dev" id="devf"><label class="sr" for="devl">Логін для локального входу</label><input id="devl" placeholder="логін для локального входу" autocomplete="off"><button class="btn sm">Увійти локально</button></form>` : ''}
+    <h1>${T('in.title')}</h1>
+    <p>${T('in.lead')}</p>
+    <a class="btn primary" href="/auth/github?next=${encodeURIComponent(next)}">${I.gh}${T('in.github')}</a>
+    <small>${T('in.note')}</small>
+    ${S.config.devLogin ? `<form class="dev" id="devf"><label class="sr" for="devl">${T('in.devLabel')}</label><input id="devl" placeholder="${T('in.devPh')}" autocomplete="off"><button class="btn sm">${T('in.devGo')}</button></form>` : ''}
   </div></div>`;
   const f = $('#devf');
   if (f) f.onsubmit = e => { e.preventDefault(); location.href = `/auth/dev?login=${encodeURIComponent($('#devl').value.trim())}&next=${encodeURIComponent(next)}`; };
@@ -152,7 +161,7 @@ function connect() {
 function renderOffline() {
   let el = $('#offline');
   if (S.online) { if (el) el.remove(); return; }
-  if (!el && $('#mn')) { el = document.createElement('div'); el.id = 'offline'; el.className = 'offline'; el.textContent = 'Немає з\'єднання. Перепідключаюсь…'; $('#mn').appendChild(el); }
+  if (!el && $('#mn')) { el = document.createElement('div'); el.id = 'offline'; el.className = 'offline'; el.textContent = T('g.offline'); $('#mn').appendChild(el); }
 }
 async function catchUp() {
   await loadRooms();
@@ -205,7 +214,7 @@ async function route() {
 function renderShell() {
   const app = document.getElementById('app');
   app.className = 'shell';
-  app.innerHTML = `<aside class="sb" id="sb" aria-label="Кімнати"></aside><main class="mn" id="mn"></main><div id="pnw"></div><div id="sbscrim"></div>`;
+  app.innerHTML = `<aside class="sb" id="sb" aria-label="${T('sb.rooms')}"></aside><main class="mn" id="mn"></main><div id="pnw"></div><div id="sbscrim"></div>`;
   applySide();
 }
 function applySide() {
@@ -216,7 +225,7 @@ function applySide() {
 async function loadRooms() {
   try { S.rooms = (await api('GET', '/api/rooms')).rooms; } catch { return; }
   renderSidebar();
-  if (S.room && !S.rooms.some(r => r.id === S.room.id)) { toast('Тебе більше немає в цій кімнаті.'); S.room = null; nav('/', true); }
+  if (S.room && !S.rooms.some(r => r.id === S.room.id)) { toast(T('sb.gone')); S.room = null; nav('/', true); }
   const unread = S.rooms.reduce((n, r) => n + (r.id !== S.room?.id && r.unread ? 1 : 0), 0);
   document.title = (unread ? `(${unread}) ` : '') + (S.room ? `${S.room.title} · Slopovyna` : 'Slopovyna');
 }
@@ -224,29 +233,29 @@ function renderSidebar() {
   const groups = [];
   for (const r of S.rooms) { const g = groupLabel(r.last_message_at); let last = groups[groups.length - 1]; if (!last || last.g !== g) groups.push(last = { g, items: [] }); last.items.push(r); }
   $('#sb').innerHTML = `
-    <div class="sb-top"><a class="logo" href="/" data-nav="/"><img src="/mascot.svg" alt="">Slopovyna</a><button class="ib" data-act="side" aria-label="Сховати бічну панель">${I.side}</button></div>
+    <div class="sb-top"><a class="logo" href="/" data-nav="/"><img src="/mascot.svg" alt="">Slopovyna</a><button class="ib" data-act="side" aria-label="${T('sb.hide')}">${I.side}</button></div>
     <div class="nav">
-      <a class="item" href="/new" data-nav="/new" ${location.pathname === '/new' ? 'aria-current="page"' : ''}>${I.edit}<span class="t">Нова кімната</span></a>
-      <button class="item" data-act="search">${I.search}<span class="t">Пошук</span><span class="k">${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'}K</span></button>
+      <a class="item" href="/new" data-nav="/new" ${location.pathname === '/new' ? 'aria-current="page"' : ''}>${I.edit}<span class="t">${T('sb.new')}</span></a>
+      <button class="item" data-act="search">${I.search}<span class="t">${T('sb.search')}</span><span class="k">${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+'}K</span></button>
     </div>
     <div class="sb-list">${groups.length ? groups.map(g => `<div class="grp">${esc(g.g)}</div>${g.items.map(r => {
       const cur = S.room && r.id === S.room.id;
-      return `<a class="item" href="/r/${r.id}" data-nav="/r/${r.id}" ${cur ? 'aria-current="page"' : ''}><span class="t">${esc(r.title)}</span>${!cur && r.mentioned ? `<span class="at-badge" aria-label="Тебе згадали">@</span>` : (!cur && r.unread ? '<span class="u" aria-label="Є нові повідомлення"></span>' : '')}</a>`;
-    }).join('')}`).join('') : '<p class="sb-empty">Кімнат ще немає. Створи першу або попроси колегу запросити тебе.</p>'}</div>
-    <div class="sb-foot"><div class="me">${avatar(S.me)}<span class="who">${esc(S.me.name)}<small>@${esc(S.me.login)}</small></span><button class="btn ghost sm" data-act="logout">Вийти</button></div></div>`;
+      return `<a class="item" href="/r/${r.id}" data-nav="/r/${r.id}" ${cur ? 'aria-current="page"' : ''}><span class="t">${esc(r.title)}</span>${!cur && r.mentioned ? `<span class="at-badge" aria-label="${T('sb.mentioned')}">@</span>` : (!cur && r.unread ? `<span class="u" aria-label="${T('sb.unread')}"></span>` : '')}</a>`;
+    }).join('')}`).join('') : `<p class="sb-empty">${T('sb.empty')}</p>`}</div>
+    <div class="sb-foot"><div class="me">${avatar(S.me)}<span class="who">${esc(S.me.name)}<small>@${esc(S.me.login)}</small></span><button class="btn ghost sm" data-act="lang" aria-label="${T('lang.switch')}" title="${T('lang.switch')}">${T('lang.code')}</button><button class="btn ghost sm" data-act="logout">${T('sb.logout')}</button></div></div>`;
 }
 
 // ------------------------------------------------------------------ new room
 function renderNew() {
-  document.title = 'Нова кімната · Slopovyna';
+  document.title = `${T('new.title')} · Slopovyna`;
   renderSidebar();
   $('#pnw').innerHTML = '';
-  $('#mn').innerHTML = `<header class="hd" id="hd"><button class="ib open-sb" data-act="side" aria-label="Показати кімнати">${I.side}</button><span class="ttl static"><span>Нова кімната</span></span></header>
+  $('#mn').innerHTML = `<header class="hd" id="hd"><button class="ib open-sb" data-act="side" aria-label="${T('sb.show')}">${I.side}</button><span class="ttl static"><span>${T('new.title')}</span></span></header>
     <div class="empty"><div class="col">
       <img class="art" src="/img/empty.webp?v=2" width="700" height="239" alt="">
-      <h1>Про що домовляємось?</h1>
-      ${composerHtml('Опиши фічу. Перше повідомлення стане темою кімнати')}
-      <div class="sugg">Агента й колег підключиш у кімнаті, щойно вона з'явиться.</div>
+      <h1>${T('new.h1')}</h1>
+      ${composerHtml(T('new.ph'))}
+      <div class="sugg">${T('new.hint')}</div>
     </div></div>`;
   $('.sugg').classList.add('foot');
   bindComposer({ onSend: async (text, _m, _e, idem) => {
@@ -260,7 +269,7 @@ function renderNew() {
 async function openRoom(id, around) {
   let info;
   try { info = await api('GET', `/api/rooms/${id}`); }
-  catch (e) { S.room = null; renderSidebar(); $('#pnw').innerHTML = ''; $('#mn').innerHTML = `<header class="hd"><button class="ib open-sb" data-act="side" aria-label="Показати кімнати">${I.side}</button></header><main class="notice"><img src="/mascot.svg" alt="" width="56"><h1>${e.status === 404 ? 'Кімнати не знайдено' : 'Не вдалося відкрити кімнату'}</h1><p>${e.status === 404 ? 'Її видалили, або тебе в ній немає. Попроси власника кімнати надіслати запрошення.' : esc(e.message)}</p><a class="btn primary" href="/new" data-nav="/new">Нова кімната</a></main>`; return; }
+  catch (e) { S.room = null; renderSidebar(); $('#pnw').innerHTML = ''; $('#mn').innerHTML = `<header class="hd"><button class="ib open-sb" data-act="side" aria-label="${T('sb.show')}">${I.side}</button></header><main class="notice"><img src="/mascot.svg" alt="" width="56"><h1>${e.status === 404 ? T('room.notFound') : T('room.openFail')}</h1><p>${e.status === 404 ? T('room.notFoundText') : esc(e.message)}</p><a class="btn primary" href="/new" data-nav="/new">${T('sb.new')}</a></main>`; return; }
   S.room = { ...info.room, members: info.members, extra: info.extra || {} };
   S.msgs = []; S.ids = new Set(); S.unseen = 0; S.lastReadAtOpen = info.room.last_read_id;
   renderRoomFrame();
@@ -279,8 +288,8 @@ async function refreshRoom() {
 function renderRoomFrame() {
   $('#mn').innerHTML = `<header class="hd" id="hd"></header>
     <div class="scroller" id="sc"><div class="col"><div id="older" class="older"></div><div id="feed"></div><div class="spacer"></div></div></div>
-    <button class="jump" id="jump" data-act="bottom" aria-label="До останніх повідомлень" hidden>${I.down}<span id="jumpn"></span></button>
-    ${composerHtml('Напиши людям або агентам · @ щоб згадати')}`;
+    <button class="jump" id="jump" data-act="bottom" aria-label="${T('room.toBottom')}" hidden>${I.down}<span id="jumpn"></span></button>
+    ${composerHtml(T('room.ph'))}`;
   renderHeader(); renderSidebar(); renderPanel();
   $('#sc').addEventListener('scroll', onScroll, { passive: true });
   bindComposer({ onSend: sendMessage, key: S.room.id, mentions: true });
@@ -290,9 +299,9 @@ function renderRoomFrame() {
 function renderHeader() {
   const ms = members();
   document.title = `${S.room.title} · Slopovyna`;
-  $('#hd').innerHTML = `<button class="ib open-sb" data-act="side" aria-label="Показати кімнати">${I.side}</button>
-    <button class="ttl" data-act="panel" aria-label="Кімната й учасники"><span>${esc(S.room.title)}</span>${I.chev}</button><span class="sp"></span>
-    <button class="pile" data-act="panel" aria-label="Учасники: ${ms.length}"><span class="avs">${ms.slice(0, 5).map(p => avatar(p)).join('')}</span><span class="lbl">${ms.length}</span></button>`;
+  $('#hd').innerHTML = `<button class="ib open-sb" data-act="side" aria-label="${T('sb.show')}">${I.side}</button>
+    <button class="ttl" data-act="panel" aria-label="${T('room.panel')}"><span>${esc(S.room.title)}</span>${I.chev}</button><span class="sp"></span>
+    <button class="pile" data-act="panel" aria-label="${T('room.members', { n: ms.length })}"><span class="avs">${ms.slice(0, 5).map(p => avatar(p)).join('')}</span><span class="lbl">${ms.length}</span></button>`;
 }
 
 function renderFeed({ initial, keep, bottom, around, prepend } = {}) {
@@ -300,16 +309,16 @@ function renderFeed({ initial, keep, bottom, around, prepend } = {}) {
   const prevH = sc.scrollHeight, prevTop = sc.scrollTop;
   let html = '', lastDay = '', newMarked = false;
   const firstUnread = S.msgs.find(m => m.id > S.lastReadAtOpen && m.id <= (S.lastIdAtOpen || 0) && m.author.id !== myId() && m.kind !== 'event');
-  if (!S.msgs.length) html = `<div class="roomempty"><img class="art" src="/img/empty.webp?v=2" width="700" height="239" alt=""><p>Тут поки тихо. Напиши, що треба вирішити, і запроси учасників.</p></div>`;
+  if (!S.msgs.length) html = `<div class="roomempty"><img class="art" src="/img/empty.webp?v=2" width="700" height="239" alt=""><p>${T('room.empty')}</p></div>`;
   for (const m of S.msgs) {
     const d = dayLabel(m.at);
     if (d !== lastDay) { html += `<div class="date"><span>${esc(d)}</span></div>`; lastDay = d; }
-    if (!newMarked && firstUnread && m.id === firstUnread.id && S.lastReadAtOpen) { html += '<div class="newline" id="newline">Нове</div>'; newMarked = true; }
+    if (!newMarked && firstUnread && m.id === firstUnread.id && S.lastReadAtOpen) { html += `<div class="newline" id="newline">${T('room.new')}</div>`; newMarked = true; }
     html += msgHtml(m);
   }
   for (const p of S.pending.values()) if (!S.ids.has(p.id)) html += msgHtml({ ...p.view, pending: true });
   feed.innerHTML = html;
-  $('#older').innerHTML = S.hasOlder ? (S.loadingOlder ? '<span class="spin" aria-hidden="true"></span>Завантажую раніші повідомлення' : '') : (S.msgs.length ? `Початок кімнати · ${esc(dayFmtY.format(S.room.created_at))}` : '');
+  $('#older').innerHTML = S.hasOlder ? (S.loadingOlder ? `<span class="spin" aria-hidden="true"></span>${T('room.loadingOlder')}` : '') : (S.msgs.length ? T('room.start', { date: esc(dayFmtY.format(S.room.created_at)) }) : '');
   if (prepend) sc.scrollTop = prevTop + (sc.scrollHeight - prevH);
   else if (initial) {
     const target = around ? $(`#m${around}`) : $('#newline');
@@ -322,16 +331,16 @@ function renderFeed({ initial, keep, bottom, around, prepend } = {}) {
 }
 function flash(el) { el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); }
 function msgHtml(m) {
-  if (m.kind === 'event') return `<div class="ev" id="m${m.id}">${esc(m.text)} · ${timeFmt.format(m.at)}</div>`;
+  if (m.kind === 'event') return `<div class="ev" id="m${m.id}">${esc(window.SlopI18n.event(m.text))} · ${timeFmt.format(m.at)}</div>`;
   const a = m.author, mine = a.id === myId();
-  const body = m.kind === 'summary' ? `<div class="sum"><div class="slb">${I.check}Домовленість</div><div class="tx">${md(m.text, m.mentions)}</div></div>` : `<div class="tx">${md(m.text, m.mentions)}</div>`;
+  const body = m.kind === 'summary' ? `<div class="sum"><div class="slb">${I.check}${T('room.summary')}</div><div class="tx">${md(m.text, m.mentions)}</div></div>` : `<div class="tx">${md(m.text, m.mentions)}</div>`;
   const extra = renderExtras(m);
   if (mine && m.kind !== 'summary') {
-    const meta = m.failed ? `<div class="meta err">${esc(m.failed)}</div>` : `<div class="meta">${m.pending ? 'надсилаю…' : timeFmt.format(m.at)}</div>`;
+    const meta = m.failed ? `<div class="meta err">${esc(m.failed)}</div>` : `<div class="meta">${m.pending ? T('room.sending') : timeFmt.format(m.at)}</div>`;
     return `<div class="m mine${m.pending ? ' pending' : ''}" id="m${m.id}"><div class="bub tx">${md(m.text, m.mentions)}</div>${extra}${meta}</div>`;
   }
-  const owner = a.kind === 'agent' ? `<span class="o">${esc(a.owner_name || '')}</span><span class="tag">агент</span>` : '';
-  return `<div class="m" id="m${m.id}">${avatar(a)}<div><div class="nm">${esc(a.name)}${owner}<time datetime="${new Date(m.at).toISOString()}">${timeFmt.format(m.at)}</time></div>${body}${extra}</div></div>`;
+  const owner = a.kind === 'agent' ? `<span class="o">${esc(a.owner_name || '')}</span><span class="tag">${T('g.agent')}</span>` : '';
+  return `<div class="m" id="m${m.id}">${avatar(a)}<div><div class="nm">${esc(nameOf(a))}${owner}<time datetime="${new Date(m.at).toISOString()}">${timeFmt.format(m.at)}</time></div>${body}${extra}</div></div>`;
 }
 const extraRenderers = [];      // attachments and delivery state plug in here
 const renderExtras = m => extraRenderers.map(f => f(m)).join('');
@@ -367,7 +376,7 @@ function renderJump() {
   const j = $('#jump'), sc = $('#sc'); if (!j || !sc) return;
   const far = sc.scrollHeight - sc.scrollTop - sc.clientHeight > 240;
   j.hidden = !(far || S.hasNewer);
-  $('#jumpn').textContent = S.unseen ? `${S.unseen} ${S.unseen === 1 ? 'нове' : 'нових'}` : '';
+  $('#jumpn').textContent = S.unseen ? T(S.unseen === 1 ? 'room.unseen1' : 'room.unseenN', { n: S.unseen }) : '';
 }
 async function jumpBottom() {
   if (S.hasNewer) {
@@ -381,13 +390,13 @@ async function jumpBottom() {
 // ------------------------------------------------------------------ composer
 function composerHtml(ph) {
   return `<div class="cmp"><div class="col"><form class="cbox" id="cform" autocomplete="off">
-    <div class="pop" id="pop" role="listbox" aria-label="Кого згадати" hidden></div>
+    <div class="pop" id="pop" role="listbox" aria-label="${T('c.mention')}" hidden></div>
     <div id="chips"></div>
-    <label for="ta" class="sr">Повідомлення</label>
+    <label for="ta" class="sr">${T('c.message')}</label>
     <textarea id="ta" rows="1" placeholder="${esc(ph)}" enterkeyhint="send"></textarea>
     <div class="cerr" id="cerr" role="alert" hidden></div>
-    <div class="crow"><span id="attachSlot"></span><span class="sp"></span><button type="submit" class="rb go" id="go" aria-label="Надіслати" disabled>${I.up}</button></div>
-  </form><div class="foot">Агенти бачать усю кімнату. Не пиши сюди паролів і ключів.</div></div></div>`;
+    <div class="crow"><span id="attachSlot"></span><span class="sp"></span><button type="submit" class="rb go" id="go" aria-label="${T('c.send')}" disabled>${I.up}</button></div>
+  </form><div class="foot">${T('c.foot')}</div></div></div>`;
 }
 let composerHooks = { slot: () => '', bind: () => {}, ready: () => true, collect: () => ({}), reset: () => {} };
 function bindComposer({ onSend, key, mentions }) {
@@ -424,7 +433,7 @@ function bindComposer({ onSend, key, mentions }) {
     const q = m[1].toLowerCase();
     const list = members().filter(p => p.id !== myId() && (labelOf(p).toLowerCase().includes(q) || (p.login || '').toLowerCase().startsWith(q))).slice(0, 8);
     if (!list.length) { pop.hidden = true; return; }
-    pop.innerHTML = list.map((p, j) => `<button type="button" role="option" aria-selected="${j === 0}" data-mention="${esc(p.id)}">${avatar(p)}${esc(labelOf(p))}<small>${p.kind === 'agent' ? (p.listening ? 'слухає' : 'не в мережі') : 'людина'}</small></button>`).join('');
+    pop.innerHTML = list.map((p, j) => `<button type="button" role="option" aria-selected="${j === 0}" data-mention="${esc(p.id)}">${avatar(p)}${esc(labelOf(p))}<small>${p.kind === 'agent' ? (p.listening ? T('c.listening') : T('c.offline')) : T('c.human')}</small></button>`).join('');
     pop.hidden = false;
   }
   function insertMention(id) {
@@ -448,7 +457,7 @@ function bindComposer({ onSend, key, mentions }) {
       const left = D.afterSend(store, key, raw, ta.value, [...S.mentions], lbl);
       ta.value = left.text; S.mentions = new Set(left.mentions); composerHooks.reset();
     } catch (e) {
-      err.textContent = e.status ? e.message : 'Немає зв\'язку з сервером. Текст збережено, надішли ще раз.'; err.hidden = false;
+      err.textContent = e.status ? e.message : T('c.noServer'); err.hidden = false;
     } finally { busy = false; sync(); }
   }
   sync();
@@ -472,27 +481,27 @@ async function sendMessage(text, mentions, extra, idem) {
 function renderPanel() {
   const w = $('#pnw'); if (!w || !S.room) { if (w) w.innerHTML = ''; return; }
   const owner = S.room.role === 'owner';
-  const row = p => `<div class="row">${avatar(p)}<span class="nmw"><b>${esc(labelOf(p))}</b><small>${p.role === 'owner' ? 'власник кімнати' : (p.login ? '@' + esc(p.login) : '')}${p.id === myId() ? ' · ти' : ''}</small></span>
-    ${p.id === myId() && p.role !== 'owner' ? `<button class="btn sm" data-act="leave">Вийти</button>` : ''}
-    ${owner && p.id !== myId() ? `<button class="btn sm danger" data-act="kick" data-uid="${p.uid}" data-name="${esc(p.name)}">Прибрати</button>` : ''}</div>`;
+  const row = p => `<div class="row">${avatar(p)}<span class="nmw"><b>${esc(labelOf(p))}</b><small>${p.role === 'owner' ? T('p.owner') : (p.login ? '@' + esc(p.login) : '')}${p.id === myId() ? T('p.you') : ''}</small></span>
+    ${p.id === myId() && p.role !== 'owner' ? `<button class="btn sm" data-act="leave">${T('p.leave')}</button>` : ''}
+    ${owner && p.id !== myId() ? `<button class="btn sm danger" data-act="kick" data-uid="${p.uid}" data-name="${esc(p.name)}">${T('p.kick')}</button>` : ''}</div>`;
   w.innerHTML = `${S.panel ? '<div class="scrim" data-act="panel"></div>' : ''}
-  <aside class="pn ${S.panel ? 'open' : ''}" aria-label="Кімната" ${S.panel ? '' : 'aria-hidden="true" inert'}>
-    <div class="pn-h"><h2>${esc(S.room.title)}</h2><button class="ib" data-act="panel" aria-label="Закрити">${I.x}</button></div>
+  <aside class="pn ${S.panel ? 'open' : ''}" aria-label="${T('p.room')}" ${S.panel ? '' : 'aria-hidden="true" inert'}>
+    <div class="pn-h"><h2>${esc(S.room.title)}</h2><button class="ib" data-act="panel" aria-label="${T('g.close')}">${I.x}</button></div>
     <div class="pn-b">
-      <h3>Люди</h3>${S.room.members.map(row).join('')}
+      <h3>${T('p.people')}</h3>${S.room.members.map(row).join('')}
       ${panelAgents()}
-      <div class="acts">${panelActions()}${owner ? `<button class="btn" data-act="invite">${I.user}Запросити колегу</button>` : ''}</div>
+      <div class="acts">${panelActions()}${owner ? `<button class="btn" data-act="invite">${I.user}${T('p.invite')}</button>` : ''}</div>
       ${owner ? `<div id="invites"></div>` : ''}
       ${panelFiles()}
-      ${owner ? `<h3>Кімната</h3><div class="fld"><label for="rt">Назва</label><div class="inp plain"><input id="rt" value="${esc(S.room.title)}" maxlength="80"></div></div>
-        <div class="acts"><button class="btn danger" data-act="delete">Видалити кімнату</button></div>` : ''}
+      ${owner ? `<h3>${T('p.room')}</h3><div class="fld"><label for="rt">${T('p.title')}</label><div class="inp plain"><input id="rt" value="${esc(S.room.title)}" maxlength="80"></div></div>
+        <div class="acts"><button class="btn danger" data-act="delete">${T('p.delete')}</button></div>` : ''}
       ${panelNotes()}
     </div>
   </aside>`;
   if (owner && S.panel) {
     loadInvites();
     const rt = $('#rt');
-    rt.addEventListener('change', async () => { const t = rt.value.trim(); if (!t || t === S.room.title) return; try { await api('PATCH', `/api/rooms/${S.room.id}`, { title: t }); S.room.title = t; renderHeader(); loadRooms(); toast('Назву змінено.'); } catch (e) { toast(e.message); } });
+    rt.addEventListener('change', async () => { const t = rt.value.trim(); if (!t || t === S.room.title) return; try { await api('PATCH', `/api/rooms/${S.room.id}`, { title: t }); S.room.title = t; renderHeader(); loadRooms(); toast(T('p.renamed')); } catch (e) { toast(e.message); } });
   }
 }
 let panelAgents = () => '', panelActions = () => '', panelNotes = () => '', panelFiles = () => '';
@@ -500,16 +509,16 @@ async function loadInvites() {
   const el = $('#invites'); if (!el) return;
   try {
     const { invites } = await api('GET', `/api/rooms/${S.room.id}/invites`);
-    el.innerHTML = invites.length ? `<h3>Запрошення, що чекають</h3><ul class="invl">${invites.map(i => `<li><span>@${esc(i.github_login)} · до ${esc(dayFmt.format(i.expires_at))}</span><button class="btn sm" data-act="revoke-inv" data-id="${i.id}">Відкликати</button></li>`).join('')}</ul>` : '';
+    el.innerHTML = invites.length ? `<h3>${T('p.pending')}</h3><ul class="invl">${invites.map(i => `<li><span>@${esc(i.github_login)} · ${T('p.until', { date: esc(dayFmt.format(i.expires_at)) })}</span><button class="btn sm" data-act="revoke-inv" data-id="${i.id}">${T('p.revoke')}</button></li>`).join('')}</ul>` : '';
   } catch {}
 }
 
 function openInvite() {
   const d = $('#dlg');
-  d.innerHTML = `<div class="dh"><h2>Запросити колегу</h2><button class="ib" data-close aria-label="Закрити">${I.x}</button></div>
-  <form class="db" id="invf"><div class="fld"><label for="gh">Логін на GitHub</label><div class="inp"><span>github.com/</span><input id="gh" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="логін колеги" required></div>
-    <div class="hint" id="hh">Посилання відкриється лише тому, хто увійде з цього акаунта. Діє 7 днів, спрацює один раз.</div></div><div id="io"></div>
-    <div class="df" id="invbtns"><button class="btn primary" id="mk">Створити посилання</button></div></form>`;
+  d.innerHTML = `<div class="dh"><h2>${T('i.title')}</h2><button class="ib" data-close aria-label="${T('g.close')}">${I.x}</button></div>
+  <form class="db" id="invf"><div class="fld"><label for="gh">${T('i.login')}</label><div class="inp"><span>github.com/</span><input id="gh" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="${T('i.ph')}" required></div>
+    <div class="hint" id="hh">${T('i.hint')}</div></div><div id="io"></div>
+    <div class="df" id="invbtns"><button class="btn primary" id="mk">${T('i.make')}</button></div></form>`;
   d.showModal(); $('#gh').focus();
   $('#invf').onsubmit = async e => {
     e.preventDefault();
@@ -517,9 +526,9 @@ function openInvite() {
     $('#mk').disabled = true;
     try {
       const r = await api('POST', `/api/rooms/${S.room.id}/invites`, { github_login: v });
-      hh.className = 'hint'; hh.textContent = `Для @${r.login}. Діє до ${dayFmt.format(r.expires_at)}, спрацює один раз. Відкликати можна в панелі кімнати.`;
-      $('#io').innerHTML = `<div class="cp"><code>${esc(r.url)}</code><button type="button" class="btn sm" data-copytext="${esc(r.url)}">Копіювати</button></div>`;
-      $('#invbtns').innerHTML = '<button type="button" class="btn" data-close>Готово</button>';
+      hh.className = 'hint'; hh.textContent = T('i.made', { login: r.login, date: dayFmt.format(r.expires_at) });
+      $('#io').innerHTML = `<div class="cp"><code>${esc(r.url)}</code><button type="button" class="btn sm" data-copytext="${esc(r.url)}">${T('g.copy')}</button></div>`;
+      $('#invbtns').innerHTML = `<button type="button" class="btn" data-close>${T('g.done')}</button>`;
       loadInvites();
     } catch (err) { hh.className = 'hint err'; hh.textContent = err.message; $('#mk').disabled = false; }
   };
@@ -528,7 +537,8 @@ function openInvite() {
 // ------------------------------------------------------------------ search
 function openSearch() {
   const d = $('#dSearch');
-  d.innerHTML = `<div class="sr-in">${I.search}<label class="sr" for="q">Пошук</label><input id="q" placeholder="Пошук по всіх твоїх кімнатах" autocomplete="off"><button class="ib" data-close aria-label="Закрити">${I.x}</button></div><div class="sr-list" id="sl" role="listbox"><p class="sr-none">Введи хоча б два символи.</p></div>`;
+  d.innerHTML = `<div class="sr-in">${I.search}<label class="sr" for="q">${T('q.label')}</label><input id="q" placeholder="${T('q.ph')}" autocomplete="off"><button class="ib" data-close aria-label="${T('g.close')}">${I.x}</button></div><div class="sr-list" id="sl" role="listbox"><p class="sr-none">${T('q.min')}</p></div>`;
+  d.setAttribute('aria-label', T('q.label'));
   d.showModal();
   const q = $('#q'); let t = null, seq = 0;
   q.focus();
@@ -541,11 +551,11 @@ function openSearch() {
   };
   async function run() {
     const v = q.value.trim(), my = ++seq;
-    if (v.length < 2) { $('#sl').innerHTML = '<p class="sr-none">Введи хоча б два символи.</p>'; return; }
+    if (v.length < 2) { $('#sl').innerHTML = `<p class="sr-none">${T('q.min')}</p>`; return; }
     let r; try { r = await api('GET', `/api/search?q=${encodeURIComponent(v)}`); } catch (e) { $('#sl').innerHTML = `<p class="sr-none">${esc(e.message)}</p>`; return; }
     if (my !== seq) return;
     const re = new RegExp(v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    $('#sl').innerHTML = r.hits.length ? r.hits.map((h, i) => `<button role="option" aria-selected="${i === 0}" data-hit="/r/${h.room}?m=${h.id}"><b>${esc(h.room_title)}</b><span>${esc(h.snippet).replace(re, x => `<mark>${x}</mark>`)}</span><span class="w">${esc(h.author)} · ${esc(dayLabel(h.at))} ${timeFmt.format(h.at)}</span></button>`).join('') : '<p class="sr-none">Нічого не знайшлося.</p>';
+    $('#sl').innerHTML = r.hits.length ? r.hits.map((h, i) => `<button role="option" aria-selected="${i === 0}" data-hit="/r/${h.room}?m=${h.id}"><b>${esc(h.room_title)}</b><span>${esc(h.snippet).replace(re, x => `<mark>${x}</mark>`)}</span><span class="w">${esc(h.author)} · ${esc(dayLabel(h.at))} ${timeFmt.format(h.at)}</span></button>`).join('') : `<p class="sr-none">${T('q.none')}</p>`;
   }
 }
 
@@ -556,8 +566,8 @@ function toast(text) {
   el.textContent = text; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 3200);
 }
 async function copy(text, btn) {
-  try { await navigator.clipboard.writeText(text); if (btn) { const t = btn.textContent; btn.textContent = 'Скопійовано'; setTimeout(() => { btn.textContent = t; }, 1500); } }
-  catch { toast('Не вдалося скопіювати. Виділи текст і скопіюй вручну.'); }
+  try { await navigator.clipboard.writeText(text); if (btn) { const t = btn.textContent; btn.textContent = T('g.copied'); setTimeout(() => { btn.textContent = t; }, 1500); } }
+  catch { toast(T('g.copyFail')); }
 }
 
 document.addEventListener('click', async e => {
@@ -576,13 +586,14 @@ document.addEventListener('click', async e => {
     if (a === 'side') { S.side = S.side === 'open' ? 'closed' : 'open'; applySide(); }
     else if (a === 'panel') { S.panel = !S.panel; renderPanel(); }
     else if (a === 'search') openSearch();
+    else if (a === 'lang') window.SlopI18n.set(window.SlopI18n.lang() === 'en' ? 'uk' : 'en');
     else if (a === 'invite') openInvite();
     else if (a === 'bottom') jumpBottom();
     else if (a === 'logout') { await api('POST', '/auth/logout'); location.href = '/'; }
     else if (a === 'revoke-inv') { await api('DELETE', `/api/rooms/${S.room.id}/invites/${t.dataset.id}`); loadInvites(); }
-    else if (a === 'kick') { if (confirm(`Прибрати ${t.dataset.name} з кімнати? Разом з людиною відключаться її агенти.`)) { await api('DELETE', `/api/rooms/${S.room.id}/members/${t.dataset.uid}`); refreshRoom(); } }
-    else if (a === 'leave') { if (confirm('Вийти з кімнати? Повернутися можна лише за новим запрошенням.')) { await api('DELETE', `/api/rooms/${S.room.id}/members/${S.me.uid}`); S.room = null; await loadRooms(); nav('/'); } }
-    else if (a === 'delete') { if (confirm(`Видалити «${S.room.title}» разом з усією історією? Це не можна скасувати.`)) { await api('DELETE', `/api/rooms/${S.room.id}`); S.room = null; await loadRooms(); nav('/'); } }
+    else if (a === 'kick') { if (confirm(T('p.kickQ', { name: t.dataset.name }))) { await api('DELETE', `/api/rooms/${S.room.id}/members/${t.dataset.uid}`); refreshRoom(); } }
+    else if (a === 'leave') { if (confirm(T('p.leaveQ'))) { await api('DELETE', `/api/rooms/${S.room.id}/members/${S.me.uid}`); S.room = null; await loadRooms(); nav('/'); } }
+    else if (a === 'delete') { if (confirm(T('p.deleteQ', { title: S.room.title }))) { await api('DELETE', `/api/rooms/${S.room.id}`); S.room = null; await loadRooms(); nav('/'); } }
     else if (actions[a]) await actions[a](t, e);
   } catch (err) { toast(err.message); }
 });
@@ -595,11 +606,20 @@ matchMedia('(max-width:860px)').addEventListener('change', () => { S.side = narr
 // Extension points for later parts of the client (agents, files).
 const actions = {};
 window.Slop = {
-  S, api, esc, md, avatar, labelOf, toast, copy, I, $, actions, refreshRoom, renderFeed, myId, timeFmt, dayFmt,
+  S, api, esc, md, avatar, labelOf, toast, copy, I, $, actions, refreshRoom, renderFeed, myId, T, fmt: () => ({ timeFmt, dayFmt, dayFmtY }),
   setExtras: f => { extraRenderers.push(f); }, prependExtras: f => { extraRenderers.unshift(f); }, setPanel: o => { if (o.agents) panelAgents = o.agents; if (o.actions) panelActions = o.actions; if (o.notes) panelNotes = o.notes; if (o.files) panelFiles = o.files; },
   setComposer: h => { composerHooks = { ...composerHooks, ...h }; },
   on: (name, f) => { (sseHandlers[name] ||= []).push(f); }, csrf: () => CSRF,
   renderPanel: () => renderPanel(), renderHeader: () => renderHeader(),
 };
+// Switching the language redraws what is on screen, keeping the room, the scroll and the draft.
+window.SlopI18n.onChange(() => {
+  makeFormatters();
+  document.querySelectorAll('dialog[open]').forEach(d => d.close());
+  if (!S.me) return signin();
+  renderSidebar();
+  if (S.room) { const top = $('#sc')?.scrollTop; renderRoomFrame(); renderFeed({}); if (top != null) $('#sc').scrollTop = top; }
+  else renderNew();
+});
 document.addEventListener('DOMContentLoaded', boot);
 })();

@@ -16,9 +16,10 @@ async function start(extra = {}) {
 }
 
 // A signed-in person: cookie + CSRF token, and a small request helper.
-async function person(base, login, name) {
+// lang: the interface language this person chose ('uk' keeps the older Ukrainian assertions meaningful)
+async function person(base, login, name, lang = 'uk') {
   const r = await fetch(`${base}/auth/dev?login=${login}${name ? `&name=${encodeURIComponent(name)}` : ''}`, { redirect: 'manual' });
-  const cookie = r.headers.get('set-cookie').split(';')[0];
+  const cookie = r.headers.get('set-cookie').split(';')[0] + (lang ? `; slop_lang=${lang}` : '');
   const me = await (await fetch(`${base}/api/me`, { headers: { cookie } })).json();
   const call = async (method, url, body, headers = {}) => {
     const res = await fetch(base + url, { method, redirect: 'manual', headers: { cookie, ...(body ? { 'Content-Type': 'application/json' } : {}), ...(method !== 'GET' ? { 'X-CSRF': me.csrf } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });

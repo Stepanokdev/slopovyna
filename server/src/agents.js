@@ -13,10 +13,11 @@
 // it twice.
 'use strict';
 const { sha256, token, randomId, HttpError, findSecret } = require('./util');
+const { t, pick } = require('./i18n');
 
 const CODE_MIN = 10, PAIR_MIN = 5, LEASE_MS = 10 * 60e3, WAIT_MAX = 900, AGENT_GAP_MS = 3000, TURN_QUIET_MIN = 20;
 const CODE_ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';           // 32 symbols, 5 bits each
-const MODELS = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor', agent: 'Агент' };
+const MODELS = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor', agent: 'Agent' };
 
 function makeCode() {
   const b = require('node:crypto').randomBytes(12);
@@ -36,7 +37,7 @@ function install(ctx) {
       listening: listening(a.id), last_seen: a.last_seen, created_at: a.created_at, client: safeJSON(a.client_json) };
   }
   const safeJSON = s => { try { return JSON.parse(s); } catch { return {}; } };
-  ctx.setDescribeAgent(id => { const a = agentRow(id); return a ? agentView(a) : { kind: 'agent', id: `a:${id}`, name: 'Агент', owner_name: '' }; });
+  ctx.setDescribeAgent(id => { const a = agentRow(id); return a ? agentView(a) : { kind: 'agent', id: `a:${id}`, name: 'Agent', owner_name: '' }; });
   const activeAgents = roomId => db.all("SELECT a.*, u.name AS owner_name, u.login AS owner_login FROM agents a JOIN users u ON u.id = a.owner_id WHERE a.room_id = ? AND a.revoked_at IS NULL ORDER BY a.created_at", roomId);
   const prev = ctx.getValidTargets();
   ctx.setValidTargets(roomId => prev(roomId).concat(activeAgents(roomId).map(a => `a:${a.id}`)));
@@ -48,9 +49,10 @@ function install(ctx) {
 
   function agentAuth(req) {
     const h = req.headers.authorization || '';
-    if (!h.startsWith('Bearer ')) throw new HttpError(401, 'Потрібен ключ агента: Authorization: Bearer slp_…');
+    if (!h.startsWith('Bearer ')) throw new HttpError(401, 'ag.needKey');
     const a = db.get('SELECT a.*, u.name AS owner_name, u.login AS owner_login FROM agents a JOIN users u ON u.id = a.owner_id WHERE a.token_hash = ?', sha256(h.slice(7).trim()));
-    if (!a || a.revoked_at) throw new HttpError(401, 'Ключ не дійсний: агента відключили або кімнату видалено. Зупинись і скажи своєму власникові.');
+    if (!a || a.revoked_at) throw new HttpError(401, 'ag.badKey');
+    req.slopLang = pick(req.headers['x-slop-lang']) || a.lang;     // the CLI may override; else the owner's language
     const now = Date.now();
     if (!a.last_seen || now - a.last_seen > 15000) db.run('UPDATE agents SET last_seen = ? WHERE id = ?', now, a.id);
     return a;
@@ -130,17 +132,17 @@ function install(ctx) {
   // ---------------------------------------------------------------- joining: code → pairing → approval
   route('POST', /^\/api\/rooms\/([\w]{12})\/join-codes$/, ({ res, s, m }) => {
     needMember(m[1], s.user);
-    const code = makeCode(), now = Date.now();
-    db.run('INSERT INTO join_codes (code_hash, room_id, owner_id, created_at, expires_at) VALUES (?,?,?,?,?)', codeHash(code), m[1], s.user.id, now, now + CODE_MIN * 60e3);
+    const code = makeCode(), now = Date.now(), lang = res.slopLang || 'en';
+    db.run('INSERT INTO join_codes (code_hash, room_id, owner_id, created_at, expires_at, lang) VALUES (?,?,?,?,?,?)', codeHash(code), m[1], s.user.id, now, now + CODE_MIN * 60e3, lang);
     const room = db.get('SELECT title FROM rooms WHERE id = ?', m[1]);
-    const line = `Приєднайся до кімнати «${room.title}» у Slopovyna: виконай \`npx -y ${config.baseUrl}/slopovyna.tgz join ${code}\` і далі дій за тим, що виведе команда.`;
+    const line = t(lang, 'ag.line', { title: room.title, cmd: `npx -y ${config.baseUrl}/slopovyna.tgz join ${code}` });
     send(res, 201, { code, line, expires_at: now + CODE_MIN * 60e3 });
   });
 
   const pairTries = new Map();
   function pairRate(ip) {
     const now = Date.now(), list = (pairTries.get(ip) || []).filter(t => now - t < 10 * 60e3);
-    if (list.length >= 20) throw new HttpError(429, 'Забагато спроб підключитися. Спробуй за 10 хвилин.');
+    if (list.length >= 20) throw new HttpError(429, 'ag.tooManyPairs');
     list.push(now); pairTries.set(ip, list);
   }
   function clientInfo(c) {
@@ -151,36 +153,36 @@ function install(ctx) {
     const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '';
     pairRate(ip);
     const b = await readJSON(req, 8192);
-    if (!/^[0-9a-f]{64}$/.test(String(b.secret_hash || ''))) throw new HttpError(400, 'secret_hash: потрібен sha256 від секрету клієнта (64 hex).');
+    if (!/^[0-9a-f]{64}$/.test(String(b.secret_hash || ''))) throw new HttpError(400, 'ag.secretHash');
     const h = codeHash(b.code), now = Date.now();
     const model = MODELS[String(b.model || 'agent').toLowerCase()] || MODELS.agent;
     const client = clientInfo(b.client || {});
     const result = db.tx(() => {
       const row = db.get('SELECT * FROM join_codes WHERE code_hash = ?', h);
-      if (!row) return { err: [404, 'Такого коду немає. Перевір, що рядок скопійовано повністю.'] };
-      if (row.used_at) return { err: [410, 'Цей код уже використано: кожен код спрацьовує один раз. Попроси власника кімнати створити новий.'] };
-      if (row.expires_at < now) return { err: [410, 'Код прострочено: він діє 10 хвилин. Попроси власника кімнати створити новий.'] };
+      if (!row) return { err: [404, 'ag.noCode'] };
+      if (row.used_at) return { err: [410, 'ag.codeUsed'], lang: row.lang };
+      if (row.expires_at < now) return { err: [410, 'ag.codeExpired'], lang: row.lang };
       const r = db.run('UPDATE join_codes SET used_at = ? WHERE code_hash = ? AND used_at IS NULL', now, h);
-      if (!r.changes) return { err: [410, 'Цей код уже використано. Попроси власника кімнати створити новий.'] };
+      if (!r.changes) return { err: [410, 'ag.codeUsed'], lang: row.lang };
       const id = randomId(16);
       const d = require('node:crypto').randomInt(0, 10000);
       const match = `${String(Math.floor(d / 100)).padStart(2, '0')} ${String(d % 100).padStart(2, '0')}`;
-      db.run("INSERT INTO pairings (id, code_hash, room_id, owner_id, secret_hash, match, model, client_json, ip, status, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?, 'pending', ?, ?)",
-        id, h, row.room_id, row.owner_id, b.secret_hash, match, model, JSON.stringify(client), ip, now, now + PAIR_MIN * 60e3);
+      db.run("INSERT INTO pairings (id, code_hash, room_id, owner_id, secret_hash, match, model, client_json, ip, status, created_at, expires_at, lang) VALUES (?,?,?,?,?,?,?,?,?, 'pending', ?, ?, ?)",
+        id, h, row.room_id, row.owner_id, b.secret_hash, match, model, JSON.stringify(client), ip, now, now + PAIR_MIN * 60e3, row.lang);
       return { id, row, match };
     });
-    if (result.err) throw new HttpError(result.err[0], result.err[1]);
+    if (result.err) { if (!pick(req.headers['x-slop-lang']) && result.lang) req.slopLang = result.lang; throw new HttpError(result.err[0], result.err[1]); }
     const p = db.get('SELECT * FROM pairings WHERE id = ?', result.id);
     push([result.row.owner_id], 'pairing', pairingView(p));
     const room = db.get('SELECT r.title, u.name FROM rooms r JOIN users u ON u.id = ? WHERE r.id = ?', result.row.owner_id, result.row.room_id);
-    send(res, 201, { pairing_id: p.id, match: p.match, room_title: room.title, owner_name: room.name, expires_at: p.expires_at });
+    send(res, 201, { pairing_id: p.id, match: p.match, room_title: room.title, owner_name: room.name, expires_at: p.expires_at, lang: p.lang });
   });
   function pairingView(p) {
     return { id: p.id, room: p.room_id, match: p.match, model: p.model, client: safeJSON(p.client_json), ip: p.ip, status: p.status, created_at: p.created_at, expires_at: p.expires_at };
   }
   function pairing(id, secret) {
     const p = db.get('SELECT * FROM pairings WHERE id = ?', String(id));
-    if (!p || !secret || sha256(String(secret)) !== p.secret_hash) throw new HttpError(404, 'Немає такого запиту на підключення.');
+    if (!p || !secret || sha256(String(secret)) !== p.secret_hash) throw new HttpError(404, 'ag.noPairing');
     if (p.status === 'pending' && p.expires_at < Date.now()) { db.run("UPDATE pairings SET status = 'expired' WHERE id = ? AND status = 'pending'", p.id); p.status = 'expired'; }
     return p;
   }
@@ -193,14 +195,15 @@ function install(ctx) {
     const secret = req.headers['x-pair-secret'];
     const answer = () => {
       const p = pairing(m[1], secret);
+      const L = pick(req.headers['x-slop-lang']) || p.lang;
       if (p.status === 'pending') return null;
-      if (p.status === 'denied') return [403, { status: 'denied', error: 'Власник кімнати відхилив запит. Код більше не працює.' }];
-      if (p.status === 'expired') return [410, { status: 'expired', error: 'Запит не підтвердили за 5 хвилин. Попроси власника створити новий код.' }];
-      if (p.status === 'collected') return [410, { status: 'collected', error: 'Ключ за цим запитом уже отримано.' }];
+      if (p.status === 'denied') return [403, { status: 'denied', error: t(L, 'ag.denied') }];
+      if (p.status === 'expired') return [410, { status: 'expired', error: t(L, 'ag.pairExpired') }];
+      if (p.status === 'collected') return [410, { status: 'collected', error: t(L, 'ag.collected') }];
       const a = agentRow(p.agent_id);
-      if (!a || a.revoked_at) return [410, { status: 'revoked', error: 'Агента вже відключили.' }];
+      if (!a || a.revoked_at) return [410, { status: 'revoked', error: t(L, 'ag.revoked') }];
       const room = db.get('SELECT id, title FROM rooms WHERE id = ?', a.room_id);
-      return [200, { status: 'approved', token: p.token_once, agent: { id: a.id, name: `${a.model} · ${a.owner_name}`, owner: a.owner_name }, room, server: config.baseUrl }];
+      return [200, { status: 'approved', token: p.token_once, agent: { id: a.id, name: `${a.model} · ${a.owner_name}`, owner: a.owner_name }, room, server: config.baseUrl, lang: a.lang }];
     };
     const now = answer();
     if (now) return send(res, now[0], now[1]);
@@ -208,9 +211,9 @@ function install(ctx) {
     if (!wait) return send(res, 200, { status: 'pending' });
     let done = false, set = pairWaiters.get(m[1]);
     if (!set) pairWaiters.set(m[1], set = new Set());
-    const finish = () => { if (done) return; let r; try { r = answer(); } catch (e) { r = [e.status || 500, { error: e.message }]; } if (!r) return; done = true; cleanup(); send(res, r[0], r[1]); };
-    const t = setTimeout(() => { if (done) return; done = true; cleanup(); send(res, 200, { status: 'pending' }); }, wait * 1000);
-    const cleanup = () => { clearTimeout(t); set.delete(finish); if (!set.size) pairWaiters.delete(m[1]); };
+    const finish = () => { if (done) return; let r; try { r = answer(); } catch (e) { r = [e.status || 500, { error: t(pick(req.headers['x-slop-lang']) || 'en', e.message) }]; } if (!r) return; done = true; cleanup(); send(res, r[0], r[1]); };
+    const timer = setTimeout(() => { if (done) return; done = true; cleanup(); send(res, 200, { status: 'pending' }); }, wait * 1000);
+    const cleanup = () => { clearTimeout(timer); set.delete(finish); if (!set.size) pairWaiters.delete(m[1]); };
     set.add(finish);
     req.on('close', () => { if (!done) { done = true; cleanup(); } });
   });
@@ -222,9 +225,9 @@ function install(ctx) {
 
   function decide(s, id, approve) {
     const p = db.get('SELECT * FROM pairings WHERE id = ?', String(id));
-    if (!p || p.owner_id !== s.user.id) throw new HttpError(404, 'Немає такого запиту.');
-    if (p.status !== 'pending') throw new HttpError(409, p.status === 'approved' || p.status === 'collected' ? 'Цей запит уже підтверджено.' : 'Цей запит уже закрито.');
-    if (p.expires_at < Date.now()) { db.run("UPDATE pairings SET status = 'expired' WHERE id = ?", p.id); throw new HttpError(410, 'Запит прострочено. Створи новий код.'); }
+    if (!p || p.owner_id !== s.user.id) throw new HttpError(404, 'ag.noRequest');
+    if (p.status !== 'pending') throw new HttpError(409, p.status === 'approved' || p.status === 'collected' ? 'ag.alreadyApproved' : 'ag.closed');
+    if (p.expires_at < Date.now()) { db.run("UPDATE pairings SET status = 'expired' WHERE id = ?", p.id); throw new HttpError(410, 'ag.requestExpired'); }
     needMember(p.room_id, s.user);
     if (!approve) {
       db.run("UPDATE pairings SET status = 'denied', decided_at = ? WHERE id = ? AND status = 'pending'", Date.now(), p.id);
@@ -235,12 +238,12 @@ function install(ctx) {
     const ok = db.tx(() => {
       const r = db.run("UPDATE pairings SET status = 'approved', agent_id = ?, token_once = ?, decided_at = ? WHERE id = ? AND status = 'pending'", aid, key, now, p.id);
       if (!r.changes) return false;
-      db.run('INSERT INTO agents (id, room_id, owner_id, model, client_json, token_hash, created_at) VALUES (?,?,?,?,?,?,?)', aid, p.room_id, p.owner_id, p.model, p.client_json, sha256(key), now);
+      db.run('INSERT INTO agents (id, room_id, owner_id, model, client_json, token_hash, created_at, lang) VALUES (?,?,?,?,?,?,?,?)', aid, p.room_id, p.owner_id, p.model, p.client_json, sha256(key), now, p.lang);
       return true;
     });
-    if (!ok) throw new HttpError(409, 'Цей запит уже закрито.');
+    if (!ok) throw new HttpError(409, 'ag.closed');
     authorCache.delete(`agent:${aid}`);
-    ctx.event(p.room_id, `${p.model} · ${s.user.name} тепер у кімнаті`);
+    ctx.event(p.room_id, 'ev.joined', { name: `${p.model} · ${s.user.name}` });
     wakePair(p.id); announce(p.room_id);
     return agentView(agentRow(aid));
   }
@@ -253,14 +256,14 @@ function install(ctx) {
     db.run('UPDATE agents SET revoked_at = ? WHERE id = ?', Date.now(), a.id);
     killAgent(a.id);
     authorCache.delete(`agent:${a.id}`);
-    if (byName !== null) ctx.event(a.room_id, `${a.model} · ${a.owner_name} більше не в кімнаті`);
+    if (byName !== null) ctx.event(a.room_id, 'ev.left', { name: `${a.model} · ${a.owner_name}` });
     announce(a.room_id);
   }
   route('DELETE', /^\/api\/rooms\/([\w]{12})\/agents\/([\w]{10})$/, ({ res, s, m }) => {
     const me = needMember(m[1], s.user);
     const a = agentRow(m[2]);
-    if (!a || a.room_id !== m[1] || a.revoked_at) throw new HttpError(404, 'Такого агента в кімнаті немає.');
-    if (a.owner_id !== s.user.id && me.role !== 'owner') throw new HttpError(403, 'Відключити можна свого агента. Чужого — лише власник кімнати.');
+    if (!a || a.room_id !== m[1] || a.revoked_at) throw new HttpError(404, 'ag.notInRoom');
+    if (a.owner_id !== s.user.id && me.role !== 'owner') throw new HttpError(403, 'ag.kickRule');
     revoke(a, s.user.name);
     send(res, 200, { ok: true });
   });
@@ -271,7 +274,7 @@ function install(ctx) {
   const agentRoute = (method, path, fn) => route(method, new RegExp('^/api/agent' + path + '$'), async c => fn({ ...c, a: agentAuth(c.req) }));
   const RULES = { lease_minutes: LEASE_MS / 60e3, max_text: 20000, min_gap_seconds: AGENT_GAP_MS / 1000, wait_max_seconds: WAIT_MAX };
 
-  agentRoute('GET', '/me', ({ res, a }) => send(res, 200, { agent: agentView(a), room: db.get('SELECT id, title FROM rooms WHERE id = ?', a.room_id), rules: RULES, rules_url: `${config.baseUrl}/agent.md` }));
+  agentRoute('GET', '/me', ({ req, res, a }) => send(res, 200, { agent: agentView(a), room: db.get('SELECT id, title FROM rooms WHERE id = ?', a.room_id), rules: RULES, rules_url: `${config.baseUrl}/agent${(req.slopLang || a.lang) === 'uk' ? '.uk' : ''}.md` }));
 
   agentRoute('GET', '/brief', ({ res, a }) => {
     const room = db.get('SELECT id, title FROM rooms WHERE id = ?', a.room_id);
@@ -314,14 +317,14 @@ function install(ctx) {
     let done = false;
     const w = {
       wake: () => { if (done) return; const e = take(); if (e) { finish(); send(res, 200, eventView(e)); } },
-      kill: () => { if (done) return; finish(); send(res, 401, { error: 'Тебе відключили від кімнати. Зупинись і скажи своєму власникові.' }); },
+      kill: () => { if (done) return; finish(); send(res, 401, { error: t(req.slopLang, 'ag.youAreOut') }); },
       // someone opens a file this agent sent: hand the request to the waiting client, which uploads it
       file: payload => { if (done) return false; finish(); send(res, 200, { type: 'file_request', ...payload }); return true; },
     };
-    const t = setTimeout(() => { if (done) return; finish(); send(res, 204, ''); }, timeout * 1000);
+    const timer = setTimeout(() => { if (done) return; finish(); send(res, 204, ''); }, timeout * 1000);
     // a lease that ran out elsewhere becomes takeable without a new message: look again now and then
     const poll = setInterval(w.wake, 30000);
-    const finish = () => { done = true; clearTimeout(t); clearInterval(poll); dropWaiter(a, w); };
+    const finish = () => { done = true; clearTimeout(timer); clearInterval(poll); dropWaiter(a, w); };
     addWaiter(a, w);
     w.wake();                                     // recheck after registering: no missed wakeup
     req.on('close', () => { if (!done) finish(); });
@@ -329,14 +332,14 @@ function install(ctx) {
 
   function ownEvent(a, id) {
     const e = db.get('SELECT * FROM inbox WHERE id = ? AND agent_id = ?', Number(id), a.id);
-    if (!e) throw new HttpError(404, 'Немає такого пінга.');
+    if (!e) throw new HttpError(404, 'ag.noPing');
     return e;
   }
   agentRoute('POST', '/inbox/(\\d+)/renew', async ({ req, res, a, m }) => {
     const b = await readJSON(req, 4096); const e = ownEvent(a, m[1]);
-    if (e.state !== 'leased' || e.lease_id !== b.lease_id) throw new HttpError(409, 'Цей пінг уже не твій: його закрили або взяв інший процес.');
+    if (e.state !== 'leased' || e.lease_id !== b.lease_id) throw new HttpError(409, 'ag.pingNotYours');
     // An expired lease is not brought back to life: the ping is free again and goes out through wait.
-    if (e.lease_until < Date.now()) throw new HttpError(410, 'Оренда цього пінга скінчилась. Отримай його знову через wait.');
+    if (e.lease_until < Date.now()) throw new HttpError(410, 'ag.leaseOver');
     const until = Date.now() + LEASE_MS;
     db.run('UPDATE inbox SET lease_until = ? WHERE id = ? AND lease_id = ?', until, e.id, e.lease_id);
     send(res, 200, { lease_until: until });
@@ -345,13 +348,13 @@ function install(ctx) {
   // instead of sitting on it until the lease runs out.
   agentRoute('GET', '/inbox/(\\d+)', ({ res, a, m, url }) => {
     const e = ownEvent(a, m[1]);
-    if (e.state !== 'leased' || e.lease_id !== url.searchParams.get('lease_id') || e.lease_until < Date.now()) throw new HttpError(410, 'Цей пінг уже не твій.');
+    if (e.state !== 'leased' || e.lease_id !== url.searchParams.get('lease_id') || e.lease_until < Date.now()) throw new HttpError(410, 'ag.pingGone');
     send(res, 200, eventView(e));
   });
   agentRoute('POST', '/inbox/(\\d+)/ack', async ({ req, res, a, m }) => {
     const b = await readJSON(req, 4096); const e = ownEvent(a, m[1]);
     if (e.state === 'acked') return send(res, 200, { ok: true, already: true });
-    if (e.state !== 'leased' || e.lease_id !== b.lease_id) throw new HttpError(409, 'Цей пінг зараз у іншого процесу. Нічого не роби з ним.');
+    if (e.state !== 'leased' || e.lease_id !== b.lease_id) throw new HttpError(409, 'ag.pingOther');
     db.run("UPDATE inbox SET state = 'acked', acked_at = ? WHERE id = ? AND lease_id = ?", Date.now(), e.id, e.lease_id);
     pushDelivery(a.room_id, e.message_id);
     send(res, 200, { ok: true });
@@ -366,7 +369,7 @@ function install(ctx) {
     const mentions = Array.isArray(b.mentions) ? b.mentions.map(String) : [];
     const rt = b.reply_to && typeof b.reply_to === 'object' ? b.reply_to : null;
     const secret = findSecret(text);
-    if (secret) throw new HttpError(422, `Схоже, у повідомленні ${secret}. Прибери його і не намагайся обійти перевірку.`);
+    if (secret) throw new HttpError(422, 'msg.secretAgent', { vars: { what: { key: secret } } });
     let ev = null;
     if (rt) {
       ev = ownEvent(a, rt.event_id);
@@ -374,14 +377,14 @@ function install(ctx) {
         const was = db.get('SELECT * FROM messages WHERE id = ?', ev.reply_id);
         return send(res, 200, { message: forAgent(messageView(was), a.id), duplicate: true });
       }
-      if (ev.state !== 'leased' || ev.lease_id !== rt.lease_id) throw new HttpError(409, 'На цей пінг уже відповідає інший твій процес або його закрито. Нічого не повторюй.');
+      if (ev.state !== 'leased' || ev.lease_id !== rt.lease_id) throw new HttpError(409, 'ag.replyTaken');
     } else {
       const lastReal = db.get("SELECT author_kind, author_id, created_at FROM messages WHERE room_id = ? AND kind != 'event' ORDER BY id DESC LIMIT 1", a.room_id);
       if (!hasFiles && lastReal && lastReal.author_kind === 'agent' && lastReal.author_id === a.id && Date.now() - lastReal.created_at < TURN_QUIET_MIN * 60e3)
-        throw new HttpError(409, `Зараз не твоя черга: останнє повідомлення твоє. Чекай відповіді (wait). Якщо тиша триватиме ${TURN_QUIET_MIN} хв, можна написати ще раз.`);
+        throw new HttpError(409, 'ag.notYourTurn', { vars: { min: TURN_QUIET_MIN } });
     }
     const now = Date.now(), lp = lastPost.get(a.id) || 0;
-    if (now - lp < AGENT_GAP_MS) throw new HttpError(429, 'Занадто часто.', { retry_after: Math.ceil((AGENT_GAP_MS - (now - lp)) / 1000) });
+    if (now - lp < AGENT_GAP_MS) throw new HttpError(429, 'err.tooOften', { retry_after: Math.ceil((AGENT_GAP_MS - (now - lp)) / 1000) });
     const idem = ev ? `reply-${ev.id}` : (typeof b.idem === 'string' && /^[\w-]{8,64}$/.test(b.idem) ? b.idem : null);
     // Synchronous from here: the lease check above and the write below cannot interleave with another request.
     const r = postMessage({ roomId: a.room_id, authorKind: 'agent', authorId: a.id, text, kind, mentions, idem, attachments: b.attachments });

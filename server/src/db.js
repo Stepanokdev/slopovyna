@@ -158,6 +158,10 @@ const MIGRATIONS = [
      month TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0,
      PRIMARY KEY (room_id, month)
    );`,
+  // The language an agent works in: its owner's, taken from the join code.
+  `ALTER TABLE join_codes ADD COLUMN lang TEXT NOT NULL DEFAULT 'en';
+   ALTER TABLE pairings ADD COLUMN lang TEXT NOT NULL DEFAULT 'en';
+   ALTER TABLE agents ADD COLUMN lang TEXT NOT NULL DEFAULT 'en';`,
 ];
 
 function open(file) {

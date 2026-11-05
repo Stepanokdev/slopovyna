@@ -11,6 +11,7 @@
 const crypto = require('node:crypto');
 const { randomId, HttpError, readJSON, sha256 } = require('./util');
 const { presign } = require('./s3');
+const { t } = require('./i18n');
 
 const MAX_SOURCE = 25 * 1024 * 1024;          // a file passed through the server
 const MAX_STORAGE = 200 * 1024 * 1024;        // a file in the room's own bucket
@@ -52,13 +53,13 @@ function install(ctx) {
   function validStorage(b) {
     const s = v => String(v || '').trim();
     let endpoint = s(b.endpoint).replace(/\/+$/, '');
-    if (!/^https?:\/\/[^\s/]+(\/[^\s]*)?$/i.test(endpoint)) throw new HttpError(400, 'Адреса сховища має виглядати як https://<account>.r2.cloudflarestorage.com');
-    if (endpoint.startsWith('http://') && !config.allowHttpStorage) throw new HttpError(400, 'Сховище має бути за https.');
+    if (!/^https?:\/\/[^\s/]+(\/[^\s]*)?$/i.test(endpoint)) throw new HttpError(400, 'st.badEndpoint');
+    if (endpoint.startsWith('http://') && !config.allowHttpStorage) throw new HttpError(400, 'st.https');
     const bucket = s(b.bucket);
-    if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new HttpError(400, 'Назва бакета: малі літери, цифри, крапки й дефіси, 3–63 символи.');
+    if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new HttpError(400, 'st.badBucket');
     const region = s(b.region) || (/r2\.cloudflarestorage\.com/.test(endpoint) ? 'auto' : 'us-east-1');
     const access_key_id = s(b.access_key_id), secret = s(b.secret_access_key);
-    if (!access_key_id || !secret) throw new HttpError(400, 'Потрібні Access Key ID і Secret Access Key цього бакета.');
+    if (!access_key_id || !secret) throw new HttpError(400, 'st.needKeys');
     const prefix = s(b.prefix).replace(/^\/+|\/+$/g, '');
     return { endpoint, bucket, region, access_key_id, secret, prefix };
   }
@@ -69,26 +70,26 @@ function install(ctx) {
     const body = 'slopovyna access check';
     const sign = (method, extra) => presign({ method, endpoint: st.endpoint, bucket: st.bucket, key: probeKey, region: st.region, accessKeyId: st.access_key_id, secretAccessKey: st.secret, expires: 60, ...extra });
     const tryFetch = async (url, opts, what) => {
-      let r; try { r = await fetch(url, { ...opts, signal: AbortSignal.timeout(10000) }); } catch (e) { throw new HttpError(400, `Не вдалося з'єднатися зі сховищем (${what}): ${e.cause?.code || e.message}`); }
-      if (!r.ok) { const t = (await r.text().catch(() => '')).match(/<Code>([^<]+)<\/Code>/)?.[1] || r.status; throw new HttpError(400, `Сховище не дозволило ${what}: ${t}. Перевір ключ, назву бакета і права ключа на читання й запис.`); }
+      let r; try { r = await fetch(url, { ...opts, signal: AbortSignal.timeout(10000) }); } catch (e) { throw new HttpError(400, 'st.connect', { vars: { what: { key: what }, why: e.cause?.code || e.message } }); }
+      if (!r.ok) { const t = (await r.text().catch(() => '')).match(/<Code>([^<]+)<\/Code>/)?.[1] || r.status; throw new HttpError(400, 'st.refused', { vars: { what: { key: what }, code: t } }); }
       return r;
     };
-    await tryFetch(sign('PUT'), { method: 'PUT', body }, 'запис');
-    const got = await (await tryFetch(sign('GET'), { method: 'GET' }, 'читання')).text();
-    if (got !== body) throw new HttpError(400, 'Сховище повернуло не те, що записали.');
-    await tryFetch(sign('DELETE'), { method: 'DELETE' }, 'видалення');
+    await tryFetch(sign('PUT'), { method: 'PUT', body }, 'st.write');
+    const got = await (await tryFetch(sign('GET'), { method: 'GET' }, 'st.read')).text();
+    if (got !== body) throw new HttpError(400, 'st.mismatch');
+    await tryFetch(sign('DELETE'), { method: 'DELETE' }, 'st.delete');
   }
 
   route('GET', /^\/api\/rooms\/([\w]{12})\/storage$/, ({ res, s, m }) => { needMember(m[1], s.user); send(res, 200, storageView(m[1])); });
   route('PUT', /^\/api\/rooms\/([\w]{12})\/storage$/, async ({ req, res, s, m }) => {
     const me = needMember(m[1], s.user);
-    if (me.role !== 'owner') throw new HttpError(403, 'Сховище підключає лише власник кімнати.');
+    if (me.role !== 'owner') throw new HttpError(403, 'st.ownerConnect');
     const st = validStorage(await readJSON(req, 8192));
     await probe(st);
     db.run(`INSERT INTO storages (room_id, endpoint, bucket, region, prefix, access_key_id, secret_enc, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?)
             ON CONFLICT(room_id) DO UPDATE SET endpoint=excluded.endpoint, bucket=excluded.bucket, region=excluded.region, prefix=excluded.prefix, access_key_id=excluded.access_key_id, secret_enc=excluded.secret_enc, created_by=excluded.created_by, created_at=excluded.created_at`,
       m[1], st.endpoint, st.bucket, st.region, st.prefix, st.access_key_id, seal(st.secret), s.user.id, Date.now());
-    ctx.event(m[1], `${s.user.name} підключає своє сховище для файлів кімнати`);
+    ctx.event(m[1], 'ev.storageOn', { name: s.user.name });
     push(ctx.memberIds(m[1]), 'storage', { room: m[1] });
     send(res, 200, storageView(m[1]));
   });
@@ -96,16 +97,16 @@ function install(ctx) {
   // this site (CORS). The server cannot check that for the browser.
   route('POST', /^\/api\/rooms\/([\w]{12})\/storage\/probe$/, ({ res, s, m }) => {
     const me = needMember(m[1], s.user);
-    if (me.role !== 'owner') throw new HttpError(403, 'Лише власник кімнати.');
-    const st = storageOf(m[1]); if (!st) throw new HttpError(404, 'Сховище не підключене.');
+    if (me.role !== 'owner') throw new HttpError(403, 'st.ownerOnly');
+    const st = storageOf(m[1]); if (!st) throw new HttpError(404, 'st.none');
     const k = (st.prefix ? st.prefix + '/' : '') + `slopovyna-probe-${randomId(8)}.txt`;
     send(res, 200, { put: link(st, 'PUT', k, { headers: { 'content-type': 'text/plain' } }), del: link(st, 'DELETE', k), origin: config.origin });
   });
   route('DELETE', /^\/api\/rooms\/([\w]{12})\/storage$/, ({ res, s, m }) => {
     const me = needMember(m[1], s.user);
-    if (me.role !== 'owner') throw new HttpError(403, 'Відключає лише власник кімнати.');
+    if (me.role !== 'owner') throw new HttpError(403, 'st.ownerDisconnect');
     db.run('DELETE FROM storages WHERE room_id = ?', m[1]);
-    ctx.event(m[1], `${s.user.name} відключає сховище кімнати. Файли, що лежали в ньому, більше не відкриваються`);
+    ctx.event(m[1], 'ev.storageOff', { name: s.user.name });
     push(ctx.memberIds(m[1]), 'storage', { room: m[1] });
     send(res, 200, storageView(m[1]));
   });
@@ -113,11 +114,11 @@ function install(ctx) {
   // ---------------------------------------------------------------- registering a file
   function register(roomId, who, b) {
     const size = Number(b.size), hash = String(b.sha256 || '').toLowerCase();
-    if (!Number.isInteger(size) || size <= 0) throw new HttpError(400, 'Розмір файлу невідомий або нульовий.');
-    if (!/^[0-9a-f]{64}$/.test(hash)) throw new HttpError(400, 'Потрібен sha256 файлу (64 hex).');
+    if (!Number.isInteger(size) || size <= 0) throw new HttpError(400, 'f.badSize');
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw new HttpError(400, 'f.needSha');
     const st = storageOf(roomId);
     const max = st ? MAX_STORAGE : MAX_SOURCE;
-    if (size > max) throw new HttpError(413, st ? `Файл завеликий: до ${max / 1048576} МБ.` : `Без свого сховища кімнати файл передається через сервер, тож до ${max / 1048576} МБ. Більший файл — у своє сховище або посиланням туди, де він уже лежить.`);
+    if (size > max) throw new HttpError(413, st ? 'f.tooBig' : 'f.tooBigRelay', { vars: { mb: max / 1048576 } });
     const name = cleanName(b.name), mime = String(b.mime || 'application/octet-stream').slice(0, 100);
     const id = randomId(14), now = Date.now();
     const objectKey = st ? `${st.prefix ? st.prefix + '/' : ''}${roomId}/${id}` : null;   // chosen here, never by the client
@@ -128,23 +129,23 @@ function install(ctx) {
   }
   async function complete(roomId, who, id) {
     const a = db.get('SELECT * FROM attachments WHERE id = ? AND room_id = ? AND uploader_kind = ? AND uploader_id = ?', id, roomId, who.kind, who.id);
-    if (!a) throw new HttpError(404, 'Немає такого файлу.');
+    if (!a) throw new HttpError(404, 'f.none');
     if (a.status === 'ready') return { id, ok: true };
-    const st = storageOf(roomId); if (!st) throw new HttpError(409, 'Сховище кімнати відключили, поки файл завантажувався.');
-    let r; try { r = await fetch(link(st, 'HEAD', a.object_key), { method: 'HEAD', signal: AbortSignal.timeout(10000) }); } catch { throw new HttpError(502, 'Сховище не відповідає.'); }
-    if (!r.ok) throw new HttpError(409, 'Файлу в сховищі немає: завантаження не завершилось.');
-    if (Number(r.headers.get('content-length')) !== a.size) throw new HttpError(409, 'У сховищі файл іншого розміру, ніж заявлено.');
+    const st = storageOf(roomId); if (!st) throw new HttpError(409, 'f.storageGoneUpload');
+    let r; try { r = await fetch(link(st, 'HEAD', a.object_key), { method: 'HEAD', signal: AbortSignal.timeout(10000) }); } catch { throw new HttpError(502, 'f.storageDown'); }
+    if (!r.ok) throw new HttpError(409, 'f.notInStorage');
+    if (Number(r.headers.get('content-length')) !== a.size) throw new HttpError(409, 'f.sizeDiffers');
     db.run("UPDATE attachments SET status = 'ready' WHERE id = ?", id);
     return { id, ok: true };
   }
 
   // Attaching to a message happens inside postMessage's transaction.
   hooks.attach.push(({ messageId, roomId, authorKind, authorId, files }) => {
-    if (files.length > MAX_FILES) throw new HttpError(400, `До ${MAX_FILES} файлів в одному повідомленні.`);
+    if (files.length > MAX_FILES) throw new HttpError(400, 'f.maxFiles', { vars: { n: MAX_FILES } });
     for (const id of files) {
       const r = db.run("UPDATE attachments SET message_id = ? WHERE id = ? AND room_id = ? AND uploader_kind = ? AND uploader_id = ? AND status = 'ready' AND message_id IS NULL",
         messageId, id, roomId, authorKind, authorId);
-      if (!r.changes) throw new HttpError(400, 'Файл ще не завантажився або вже прикріплений до іншого повідомлення.');
+      if (!r.changes) throw new HttpError(400, 'f.notReady');
     }
   });
   const fileView = f => ({ id: f.id, name: f.name, type: f.mime, size: f.size, sha256: f.sha256, mode: f.mode, inline: !!RASTER[f.mime], from: f.uploader_kind === 'human' ? `u:${f.uploader_id}` : `a:${f.uploader_id}` });
@@ -157,10 +158,11 @@ function install(ctx) {
   const relays = new Map();          // request id -> { a, res, timer, onCancel }
 
   async function deliver(req, res, a) {
-    if (a.status !== 'ready') throw new HttpError(404, 'Файл ще не завантажено.');
+    const lang = req.slopLang || res.slopLang || 'en';
+    if (a.status !== 'ready') throw new HttpError(404, 'f.notUploaded');
     if (a.mode === 'storage') {
       const st = storageOf(a.room_id);
-      if (!st) throw new HttpError(410, 'Файл лежав у сховищі кімнати, яке відключили.', { code: 'storage_gone' });
+      if (!st) throw new HttpError(410, 'f.storageGone', { code: 'storage_gone' });
       const type = RASTER[a.mime] ? a.mime : 'application/octet-stream';
       const url = link(st, 'GET', a.object_key, { query: { 'response-content-type': type, 'response-content-disposition': disposition(a.name) } });
       res.writeHead(302, { Location: url, 'Cache-Control': 'no-store', 'X-Content-SHA256': a.sha256 });
@@ -168,7 +170,7 @@ function install(ctx) {
     }
     // from the author's machine
     const used = db.get('SELECT bytes FROM relay_usage WHERE room_id = ? AND month = ?', a.room_id, month())?.bytes || 0;
-    if (used + a.size > BUDGET) throw new HttpError(403, `Ліміт передачі файлів через сервер на цей місяць вичерпано (${Math.round(BUDGET / 1048576)} МБ). Власник кімнати може підключити своє сховище: тоді файли йдуть напряму.`, { code: 'budget' });
+    if (used + a.size > BUDGET) throw new HttpError(403, 'f.budget', { code: 'budget', vars: { mb: Math.round(BUDGET / 1048576) } });
     const author = ctx.author(a.uploader_kind, a.uploader_id);
     const reqId = randomId(16);
     const payload = { request_id: reqId, attachment_id: a.id, name: a.name, size: a.size };
@@ -178,11 +180,11 @@ function install(ctx) {
       const set = streams.get(Number(a.uploader_id));
       if (set && set.size) { push([Number(a.uploader_id)], 'file_request', { ...payload, room: a.room_id }); asked = true; }
     }
-    const offline = () => { const who = a.uploader_kind === 'agent' ? `${author.name} · ${author.owner_name}` : author.name; return [404, { error: `Файл зараз недоступний: він у ${who}, а ${a.uploader_kind === 'agent' ? 'агент' : 'людина'} не в мережі.`, code: 'offline', author: who }]; };
+    const offline = () => { const who = a.uploader_kind === 'agent' ? `${author.name} · ${author.owner_name}` : author.name; return [404, { error: t(lang, a.uploader_kind === 'agent' ? 'f.offlineAgent' : 'f.offlineHuman', { who }), code: 'offline', author: who }]; };
     if (!asked) { const [c, b] = offline(); return send(res, c, b); }
     await new Promise(resolve => {
       const timer = setTimeout(() => { relays.delete(reqId); const [c, b] = offline(); send(res, c, b); resolve(); }, SOURCE_WAIT_MS);
-      relays.set(reqId, { a, res, timer, resolve });
+      relays.set(reqId, { a, res, timer, resolve, lang });
       req.on('close', () => { const r = relays.get(reqId); if (r) { clearTimeout(r.timer); relays.delete(reqId); resolve(); } });
     });
   }
@@ -191,20 +193,20 @@ function install(ctx) {
   // is held until the sha256 is known, so a file that does not match is never delivered whole.
   async function relay(req, res, who, reqId) {
     const r = relays.get(reqId);
-    if (!r || r.a.uploader_kind !== who.kind || r.a.uploader_id !== who.id) { req.resume(); throw new HttpError(404, 'Немає такого запиту на файл.'); }
+    if (!r || r.a.uploader_kind !== who.kind || r.a.uploader_id !== who.id) { req.resume(); throw new HttpError(404, 'f.noRequest'); }
     relays.delete(reqId); clearTimeout(r.timer);
-    const { a, res: out } = r;
+    const { a, res: out, lang } = r;
     if (req.headers['x-slop-missing']) {
-      send(out, 404, { error: 'Автор більше не має цього файлу.', code: 'missing' });
+      send(out, 404, { error: t(lang, 'f.missing'), code: 'missing' });
       r.resolve(); return send(res, 200, { ok: true });
     }
     const hash = crypto.createHash('sha256');
     let got = 0, held = null, started = false, failed = false;
-    const fail = msg => { if (failed) return; failed = true; if (started) out.destroy(); else send(out, 502, { error: msg, code: 'mismatch' }); };
+    const fail = key => { if (failed) return; failed = true; if (started) out.destroy(); else send(out, 502, { error: t(lang, key), code: 'mismatch' }); };
     try {
       for await (const chunk of req) {
         got += chunk.length;
-        if (got > a.size) { fail('Файл більший, ніж заявлено. Показувати не будемо.'); break; }
+        if (got > a.size) { fail('f.bigger'); break; }
         hash.update(chunk);
         if (!started) {
           started = true;
@@ -215,20 +217,20 @@ function install(ctx) {
         if (held) out.write(held);
         held = chunk;
       }
-    } catch { fail('Автор перервав передачу.'); }
+    } catch { fail('f.interrupted'); }
     if (!failed) {
-      if (got !== a.size || hash.digest('hex') !== a.sha256) fail('Файл не збігся з тим, що надіслали. Показувати не будемо.');
+      if (got !== a.size || hash.digest('hex') !== a.sha256) fail('f.notMatch');
       else {
         out.end(held);
         db.run('INSERT INTO relay_usage (room_id, month, bytes) VALUES (?,?,?) ON CONFLICT(room_id, month) DO UPDATE SET bytes = bytes + excluded.bytes', a.room_id, month(), a.size);
       }
     }
     r.resolve();
-    send(res, failed ? 422 : 200, failed ? { error: 'Файл не збігся з тим, що заявлено.' } : { ok: true });
+    send(res, failed ? 422 : 200, failed ? { error: t(req.slopLang || res.slopLang || 'en', 'f.notMatchShort') } : { ok: true });
   }
 
   // ---------------------------------------------------------------- routes for people
-  const fileIn = (roomId, id) => { const a = db.get('SELECT * FROM attachments WHERE id = ? AND room_id = ?', String(id), roomId); if (!a) throw new HttpError(404, 'Немає такого файлу.'); return a; };
+  const fileIn = (roomId, id) => { const a = db.get('SELECT * FROM attachments WHERE id = ? AND room_id = ?', String(id), roomId); if (!a) throw new HttpError(404, 'f.none'); return a; };
   route('POST', /^\/api\/rooms\/([\w]{12})\/attachments$/, async ({ req, res, s, m }) => { needMember(m[1], s.user); send(res, 201, register(m[1], { kind: 'human', id: String(s.user.id) }, await readJSON(req, 8192))); });
   route('POST', /^\/api\/rooms\/([\w]{12})\/attachments\/([\w]{14})\/complete$/, async ({ res, s, m }) => { needMember(m[1], s.user); send(res, 200, await complete(m[1], { kind: 'human', id: String(s.user.id) }, m[2])); });
   route('GET', /^\/api\/rooms\/([\w]{12})\/attachments\/([\w]{14})$/, async ({ req, res, s, m }) => { needMember(m[1], s.user); await deliver(req, res, fileIn(m[1], m[2])); });

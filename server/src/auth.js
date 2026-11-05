@@ -46,15 +46,15 @@ function makeAuth({ db, config }) {
   // CORS preflight that no other origin passes.
   function checkCsrf(req, s) {
     const origin = req.headers.origin;
-    if (origin && origin !== config.origin) throw new HttpError(403, 'Запит з чужого сайту.');
-    if (!safeEqual(req.headers['x-csrf'] || '', s.csrf)) throw new HttpError(403, 'Немає CSRF-токена. Онови сторінку.');
+    if (origin && origin !== config.origin) throw new HttpError(403, 'err.foreignOrigin');
+    if (!safeEqual(req.headers['x-csrf'] || '', s.csrf)) throw new HttpError(403, 'err.csrf');
   }
 
   // ---- GitHub OAuth
   function safeNext(next) { return typeof next === 'string' && /^\/(?!\/)[\w\-./?=&%]*$/.test(next) ? next : '/'; }
 
   function begin(req, res, url) {
-    if (!config.github.clientId) throw new HttpError(503, 'Вхід через GitHub ще не налаштовано на сервері.');
+    if (!config.github.clientId) throw new HttpError(503, 'auth.notConfigured');
     const state = token(24);
     const next = safeNext(url.searchParams.get('next'));
     const u = new URL('https://github.com/login/oauth/authorize');
@@ -72,16 +72,16 @@ function makeAuth({ db, config }) {
     const dot = raw.indexOf('.');
     const want = dot > 0 ? raw.slice(0, dot) : '', next = safeNext(dot > 0 ? raw.slice(dot + 1) : '/');
     const state = url.searchParams.get('state') || '', code = url.searchParams.get('code') || '';
-    if (!want || !safeEqual(state, want) || !code) throw new HttpError(400, 'Вхід не вдався: посилання застаріло. Спробуй ще раз.');
+    if (!want || !safeEqual(state, want) || !code) throw new HttpError(400, 'auth.stale');
     const tr = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ client_id: config.github.clientId, client_secret: config.github.clientSecret, code, redirect_uri: config.baseUrl + '/auth/callback' }),
     });
     const tj = await tr.json().catch(() => ({}));
-    if (!tj.access_token) throw new HttpError(400, 'GitHub не підтвердив вхід. Спробуй ще раз.');
+    if (!tj.access_token) throw new HttpError(400, 'auth.denied');
     const ur = await fetch('https://api.github.com/user', { headers: { Authorization: `Bearer ${tj.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'slopovyna' } });
     const gh = await ur.json().catch(() => ({}));
-    if (!ur.ok || !gh.id) throw new HttpError(502, 'Не вдалося прочитати профіль GitHub.');
+    if (!ur.ok || !gh.id) throw new HttpError(502, 'auth.profile');
     const user = upsertUser({ github_id: gh.id, login: gh.login, name: gh.name || gh.login, avatar: gh.avatar_url });
     res.writeHead(302, { Location: next, 'Set-Cookie': [createSession(res, user, req), cookie(STATE_COOKIE, '', { maxAge: 0, secure })], 'Cache-Control': 'no-store' });
     res.end();
@@ -89,9 +89,9 @@ function makeAuth({ db, config }) {
 
   // Local development and tests only: the server refuses to start with this in production.
   function devLogin(req, res, url) {
-    if (!config.devLogin) throw new HttpError(404, 'Немає такої сторінки.');
+    if (!config.devLogin) throw new HttpError(404, 'page.404Title');
     const login = String(url.searchParams.get('login') || '').toLowerCase();
-    if (!/^[a-z\d][a-z\d-]{0,38}$/.test(login)) throw new HttpError(400, 'login');
+    if (!/^[a-z\d][a-z\d-]{0,38}$/.test(login)) throw new HttpError(400, 'inv.badLogin');
     const gid = 1e9 + (parseInt(sha256(login).slice(0, 8), 16) % 1e9);
     const user = upsertUser({ github_id: gid, login, name: url.searchParams.get('name') || login, avatar: '' });
     res.writeHead(302, { Location: safeNext(url.searchParams.get('next')), 'Set-Cookie': createSession(res, user, req), 'Cache-Control': 'no-store' });
@@ -106,9 +106,9 @@ function makeAuth({ db, config }) {
       return { github_id: u ? u.github_id : 1e9 + (parseInt(sha256(login.toLowerCase()).slice(0, 8), 16) % 1e9), login };
     }
     const r = await fetch(`https://api.github.com/users/${encodeURIComponent(login)}`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'slopovyna' } });
-    if (r.status === 404) throw new HttpError(404, `На GitHub немає акаунта @${login}.`);
+    if (r.status === 404) throw new HttpError(404, 'auth.noAccount', { vars: { login } });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.id) throw new HttpError(502, 'GitHub зараз не відповідає. Спробуй за хвилину.');
+    if (!r.ok || !j.id) throw new HttpError(502, 'auth.githubDown');
     return { github_id: j.id, login: j.login };
   }
 

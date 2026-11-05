@@ -6,6 +6,7 @@ const path = require('node:path');
 const { open } = require('./db');
 const { makeAuth } = require('./auth');
 const { sha256, token, randomId, HttpError, readJSON, findSecret } = require('./util');
+const { t, langOf, eventText } = require('./i18n');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const MAX_TEXT = 20000;
@@ -41,9 +42,9 @@ function createApp(config) {
     const key = `${kind}:${id}`;
     if (authorCache.has(key)) return authorCache.get(key);
     let a;
-    if (kind === 'human') { const u = db.get('SELECT * FROM users WHERE id = ?', Number(id)); a = u ? userView(u) : { kind, id: key, name: 'Видалений акаунт' }; }
+    if (kind === 'human') { const u = db.get('SELECT * FROM users WHERE id = ?', Number(id)); a = u ? userView(u) : { kind, id: key, name: '', deleted: true }; }
     else if (kind === 'system') a = { kind, id: 'system', name: 'Slopovyna' };
-    else a = describeAgent ? describeAgent(id) : { kind, id: key, name: 'Агент' };
+    else a = describeAgent ? describeAgent(id) : { kind, id: key, name: 'Agent' };
     authorCache.set(key, a);
     return a;
   }
@@ -57,7 +58,7 @@ function createApp(config) {
   function membership(roomId, userId) { return db.get('SELECT role, last_read_id FROM members WHERE room_id = ? AND user_id = ?', roomId, userId); }
   function needMember(roomId, user) {
     const m = membership(roomId, user.id);
-    if (!m) throw new HttpError(404, 'Кімнати не знайдено.');
+    if (!m) throw new HttpError(404, 'room.notFound');
     return m;
   }
   function roomMembersView(roomId) {
@@ -69,9 +70,9 @@ function createApp(config) {
   function postMessage({ roomId, authorKind, authorId, text, kind = 'message', mentions = [], idem = null, attachments = [] }) {
     text = String(text || '').replace(/\r\n/g, '\n');
     const files = Array.isArray(attachments) ? [...new Set(attachments.map(String))] : [];
-    if (!text.trim() && !files.length) throw new HttpError(400, 'Порожнє повідомлення.');
-    if (text.length > MAX_TEXT) throw new HttpError(413, `Задовге повідомлення: ${text.length} символів, межа ${MAX_TEXT}. Довгий текст краще надіслати файлом.`);
-    if (authorKind !== 'system') { const s = findSecret(text); if (s) throw new HttpError(422, `Схоже, у повідомленні ${s}. Прибери його: кімнату читають усі учасники та їхні агенти.`); }
+    if (!text.trim() && !files.length) throw new HttpError(400, 'msg.empty');
+    if (text.length > MAX_TEXT) throw new HttpError(413, 'msg.tooLong', { vars: { n: text.length, max: MAX_TEXT } });
+    if (authorKind !== 'system') { const s = findSecret(text); if (s) throw new HttpError(422, authorKind === 'agent' ? 'msg.secretAgent' : 'msg.secret', { vars: { what: { key: s } } }); }
     if (idem) {
       const dup = db.get('SELECT * FROM messages WHERE room_id = ? AND author_kind = ? AND author_id = ? AND idem_key = ?', roomId, authorKind, String(authorId), idem);
       if (dup) return { message: messageView(dup), duplicate: true };
@@ -97,7 +98,7 @@ function createApp(config) {
     return { message: view, duplicate: false };
   }
   let validTargets = roomId => db.all('SELECT user_id FROM members WHERE room_id = ?', roomId).map(r => `u:${r.user_id}`);
-  const event = (roomId, text) => postMessage({ roomId, authorKind: 'system', authorId: 'system', kind: 'event', text });
+  const event = (roomId, key, vars) => postMessage({ roomId, authorKind: 'system', authorId: 'system', kind: 'event', text: eventText(key, vars) });
 
   // ---------------------------------------------------------------- rooms
   function roomsFor(user) {
@@ -106,24 +107,24 @@ function createApp(config) {
                      (SELECT count(*) FROM mentions mm JOIN messages x ON x.id = mm.message_id WHERE x.room_id = r.id AND x.id > m.last_read_id AND mm.target = ?) AS mentioned
                    FROM members m JOIN rooms r ON r.id = m.room_id WHERE m.user_id = ? ORDER BY r.last_message_at DESC`, String(user.id), `u:${user.id}`, user.id);
   }
-  function titleFrom(text) {
-    const line = text.split('\n').map(s => s.trim()).find(Boolean) || 'Нова кімната';
-    const clean = line.replace(/@\S+(?: · \S+)?/g, '').replace(/[*`#>_]/g, '').trim() || 'Нова кімната';
+  function titleFrom(text, lang) {
+    const line = text.split('\n').map(s => s.trim()).find(Boolean) || t(lang, 'room.untitled');
+    const clean = line.replace(/@\S+(?: · \S+)?/g, '').replace(/[*`#>_]/g, '').trim() || t(lang, 'room.untitled');
     return clean.length > 60 ? clean.slice(0, 57).replace(/\s+\S*$/, '') + '…' : clean;
   }
-  function createRoom(user, { title, text, idem }) {
+  function createRoom(user, { title, text, idem }, lang = 'en') {
     const key = typeof idem === 'string' && /^[\w-]{8,64}$/.test(idem) ? idem : null;
     if (key) { const had = db.get('SELECT id FROM rooms WHERE owner_id = ? AND create_key = ?', user.id, key); if (had) return had.id; }
     text = String(text || '').trim();
-    const t = String(title || '').trim().slice(0, 80) || (text ? titleFrom(text) : '');
-    if (!t) throw new HttpError(400, 'Напиши, про що кімната.');
-    if (text) { const s = findSecret(text); if (s) throw new HttpError(422, `Схоже, у повідомленні ${s}. Прибери його.`); }
+    const tt = String(title || '').trim().slice(0, 80) || (text ? titleFrom(text, lang) : '');
+    if (!tt) throw new HttpError(400, 'room.needTopic');
+    if (text) { const s = findSecret(text); if (s) throw new HttpError(422, 'msg.secret', { vars: { what: { key: s } } }); }
     const id = randomId(12), now = Date.now();
     db.tx(() => {
-      db.run('INSERT INTO rooms (id, title, owner_id, created_at, last_message_at, create_key) VALUES (?,?,?,?,?,?)', id, t, user.id, now, now, key);
+      db.run('INSERT INTO rooms (id, title, owner_id, created_at, last_message_at, create_key) VALUES (?,?,?,?,?,?)', id, tt, user.id, now, now, key);
       db.run('INSERT INTO members (room_id, user_id, role, added_at) VALUES (?,?,?,?)', id, user.id, 'owner', now);
     });
-    event(id, 'Кімнату створено');
+    event(id, 'ev.created');
     if (text) postMessage({ roomId: id, authorKind: 'human', authorId: user.id, text, idem: key });
     return id;
   }
@@ -139,21 +140,25 @@ function createApp(config) {
     const file = path.join(PUBLIC, rel);
     if (!file.startsWith(PUBLIC + path.sep)) return send(res, 404, 'Not found');
     fs.readFile(file, (err, buf) => {
-      if (err) return page(res, 404, 'Такої сторінки немає', 'Можливо, посилання застаріло або в ньому помилка.', ['На головну', '/']);
+      if (err) return page(res, 404, 'page.404Title', 'page.404Text');
       const ext = path.extname(file);
-      if (html) buf = Buffer.from(buf.toString('utf8').replaceAll('__BASE_URL__', config.baseUrl));
+      if (html) { const lang = res.slopLang || 'en'; buf = Buffer.from(buf.toString('utf8').replaceAll('__BASE_URL__', config.baseUrl).replaceAll('__LANG__', lang).replaceAll('__OG_TITLE__', t(lang, 'og.title')).replaceAll('__OG_DESC__', t(lang, 'og.desc'))); }
       send(res, 200, buf, { 'Content-Type': TYPES[ext] || 'application/octet-stream',
         'Cache-Control': html ? 'no-store' : (/\.(woff2?|png|webp|jpg)$/.test(ext) ? 'public, max-age=604800' : 'no-cache'),
         'Content-Security-Policy': CSP, 'X-Frame-Options': 'DENY',
         ...(config.baseUrl.startsWith('https://') ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}) });
     });
   }
-  function page(res, code, title, text, link) {
+  // A full page (invites, sign-in trouble, 404) in the reader's language. title/text are i18n keys;
+  // text may be a literal when it already is one (an error message translated by the caller).
+  function page(res, code, titleKey, textKey, vars, link = ['page.home', '/']) {
+    const lang = res.slopLang || 'en';
     const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    const html = `<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Slopovyna</title><link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<meta property="og:site_name" content="Slopovyna"><meta property="og:title" content="Slopovyna — кімнати, де агенти домовляються"><meta property="og:image" content="${esc(config.baseUrl)}/img/og.png"><meta name="twitter:card" content="summary_large_image">
+    const title = t(lang, titleKey, vars), text = t(lang, textKey, vars);
+    const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Slopovyna</title><link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta property="og:site_name" content="Slopovyna"><meta property="og:title" content="${esc(t(lang, 'og.title'))}"><meta property="og:image" content="${esc(config.baseUrl)}/img/og-${lang}.png"><meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="/app.css"></head>
-<body class="plain"><main class="notice"><img class="art" src="/img/empty.webp?v=2" alt="" width="700" height="239"><div class="brand"><img src="/mascot.svg" alt="" width="22">Slopovyna</div><h1>${esc(title)}</h1><p>${esc(text)}</p>${link ? `<a class="btn primary" href="${esc(link[1])}">${esc(link[0])}</a>` : ''}</main></body></html>`;
+<body class="plain"><main class="notice"><img class="art" src="/img/empty.webp?v=2" alt="" width="700" height="239"><div class="brand"><img src="/mascot.svg" alt="" width="22">Slopovyna</div><h1>${esc(title)}</h1><p>${esc(text)}</p>${link ? `<a class="btn primary" href="${esc(link[1])}">${esc(t(lang, link[0]))}</a>` : ''}</main></body></html>`;
     send(res, code, html, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': CSP, 'X-Frame-Options': 'DENY', ...(config.baseUrl.startsWith('https://') ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}) });
   }
 
@@ -166,7 +171,7 @@ function createApp(config) {
   route('GET', /^\/auth\/github$/, ({ req, res, url }) => auth.begin(req, res, url));
   route('GET', /^\/auth\/callback$/, async ({ req, res, url }) => {
     try { await auth.callback(req, res, url); }
-    catch (e) { if (e instanceof HttpError) return page(res, e.status, 'Не вийшло увійти', e.message, ['Спробувати ще раз', '/auth/github']); throw e; }
+    catch (e) { if (e instanceof HttpError) return page(res, e.status, 'auth.failedTitle', e.message, e.extra?.vars, ['auth.retry', '/auth/github']); throw e; }
   });
   route('GET', /^\/auth\/dev$/, ({ req, res, url }) => auth.devLogin(req, res, url));
   route('POST', /^\/auth\/logout$/, ({ req, res, s }) => { if (s) auth.checkCsrf(req, s); send(res, 200, { ok: true }, { 'Set-Cookie': auth.logout(req) }); });
@@ -177,7 +182,7 @@ function createApp(config) {
   route('GET', /^\/api\/rooms$/, ({ res, s }) => send(res, 200, { rooms: roomsFor(s.user) }));
   route('POST', /^\/api\/rooms$/, async ({ req, res, s }) => {
     const b = await readJSON(req);
-    const id = createRoom(s.user, b);
+    const id = createRoom(s.user, b, res.slopLang);
     push([s.user.id], 'rooms', {});
     send(res, 201, { id });
   });
@@ -191,17 +196,17 @@ function createApp(config) {
   ctxApi.getExtraRoomInfo = () => extraRoomInfo;
   route('PATCH', /^\/api\/rooms\/([\w]{12})$/, async ({ req, res, s, m }) => {
     const me = needMember(m[1], s.user);
-    if (me.role !== 'owner') throw new HttpError(403, 'Назву міняє лише власник кімнати.');
+    if (me.role !== 'owner') throw new HttpError(403, 'room.renameOwner');
     const b = await readJSON(req);
-    const t = String(b.title || '').trim().slice(0, 80);
-    if (!t) throw new HttpError(400, 'Назва порожня.');
-    db.run('UPDATE rooms SET title = ? WHERE id = ?', t, m[1]);
+    const title = String(b.title || '').trim().slice(0, 80);
+    if (!title) throw new HttpError(400, 'room.titleEmpty');
+    db.run('UPDATE rooms SET title = ? WHERE id = ?', title, m[1]);
     push(memberIds(m[1]), 'rooms', {});
     send(res, 200, { ok: true });
   });
   route('DELETE', /^\/api\/rooms\/([\w]{12})$/, ({ res, s, m }) => {
     const me = needMember(m[1], s.user);
-    if (me.role !== 'owner') throw new HttpError(403, 'Видалити кімнату може лише власник.');
+    if (me.role !== 'owner') throw new HttpError(403, 'room.deleteOwner');
     const ids = memberIds(m[1]);
     for (const h of hooks.onRoomDelete || []) h(m[1]);
     db.run('DELETE FROM rooms WHERE id = ?', m[1]);
@@ -243,7 +248,7 @@ function createApp(config) {
   const rate = new Map();
   function humanRate(uid) {
     const now = Date.now(), list = (rate.get(uid) || []).filter(t => now - t < 10000);
-    if (list.length >= 15) throw new HttpError(429, 'Занадто швидко. Зачекай кілька секунд.');
+    if (list.length >= 15) throw new HttpError(429, 'err.tooFast');
     list.push(now); rate.set(uid, list);
   }
   route('POST', /^\/api\/rooms\/([\w]{12})\/read$/, async ({ req, res, s, m }) => {
@@ -257,17 +262,17 @@ function createApp(config) {
   // members & invites
   route('POST', /^\/api\/rooms\/([\w]{12})\/invites$/, async ({ req, res, s, m }) => {
     const me = needMember(m[1], s.user);
-    if (me.role !== 'owner') throw new HttpError(403, 'Запрошує лише власник кімнати.');
+    if (me.role !== 'owner') throw new HttpError(403, 'inv.ownerOnly');
     const b = await readJSON(req);
     const login = String(b.github_login || '').trim().replace(/^@/, '');
-    if (!/^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(login)) throw new HttpError(400, 'GitHub-логін складається з літер, цифр і дефісів, до 39 символів.');
+    if (!/^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(login)) throw new HttpError(400, 'inv.badLogin');
     const gh = await auth.resolveGithubLogin(login);
     const already = db.get('SELECT 1 FROM members mm JOIN users u ON u.id = mm.user_id WHERE mm.room_id = ? AND u.github_id = ?', m[1], gh.github_id);
-    if (already) throw new HttpError(409, `@${gh.login} уже в кімнаті.`);
-    const t = token(24), now = Date.now();
+    if (already) throw new HttpError(409, 'inv.already', { vars: { login: gh.login } });
+    const tok = token(24), now = Date.now();
     db.run('INSERT INTO invites (token_hash, room_id, github_id, github_login, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?,?)',
-      sha256(t), m[1], gh.github_id, gh.login, s.user.id, now, now + INVITE_DAYS * 864e5);
-    send(res, 201, { url: `${config.baseUrl}/i/${t}`, login: gh.login, expires_at: now + INVITE_DAYS * 864e5 });
+      sha256(tok), m[1], gh.github_id, gh.login, s.user.id, now, now + INVITE_DAYS * 864e5);
+    send(res, 201, { url: `${config.baseUrl}/i/${tok}`, login: gh.login, expires_at: now + INVITE_DAYS * 864e5 });
   });
   route('GET', /^\/api\/rooms\/([\w]{12})\/invites$/, ({ res, s, m }) => {
     const me = needMember(m[1], s.user);
@@ -276,22 +281,22 @@ function createApp(config) {
   });
   route('DELETE', /^\/api\/rooms\/([\w]{12})\/invites\/(\d+)$/, ({ res, s, m }) => {
     const me = needMember(m[1], s.user);
-    if (me.role !== 'owner') throw new HttpError(403, 'Відкликає лише власник кімнати.');
+    if (me.role !== 'owner') throw new HttpError(403, 'inv.revokeOwner');
     db.run('UPDATE invites SET revoked_at = ? WHERE id = ? AND room_id = ? AND used_at IS NULL', Date.now(), Number(m[2]), m[1]);
     send(res, 200, { ok: true });
   });
   route('DELETE', /^\/api\/rooms\/([\w]{12})\/members\/(\d+)$/, ({ res, s, m }) => {
     const me = needMember(m[1], s.user);
     const uid = Number(m[2]);
-    if (uid !== s.user.id && me.role !== 'owner') throw new HttpError(403, 'Прибрати іншого учасника може лише власник.');
+    if (uid !== s.user.id && me.role !== 'owner') throw new HttpError(403, 'mem.kickOwner');
     const target = membership(m[1], uid);
-    if (!target) throw new HttpError(404, 'Такого учасника немає.');
-    if (target.role === 'owner') throw new HttpError(400, 'Власник не може вийти з власної кімнати. Її можна видалити.');
+    if (!target) throw new HttpError(404, 'mem.none');
+    if (target.role === 'owner') throw new HttpError(400, 'mem.ownerStays');
     const u = db.get('SELECT * FROM users WHERE id = ?', uid);
     const ids = memberIds(m[1]);
     for (const h of hooks.onMemberRemove || []) h(m[1], uid);
     db.run('DELETE FROM members WHERE room_id = ? AND user_id = ?', m[1], uid);
-    event(m[1], `${u.name} більше не в кімнаті`);
+    event(m[1], 'ev.left', { name: u.name });
     push(ids, 'rooms', {});
     send(res, 200, { ok: true });
   });
@@ -322,23 +327,23 @@ function createApp(config) {
   route('GET', /^\/i\/([\w-]{20,64})$/, ({ req, res, s, m }) => {
     if (!s) { res.writeHead(302, { Location: `/?next=${encodeURIComponent('/i/' + m[1])}`, 'Cache-Control': 'no-store' }); return res.end(); }
     const inv = db.get('SELECT * FROM invites WHERE token_hash = ?', sha256(m[1]));
-    if (!inv) return page(res, 404, 'Запрошення не знайдено', 'Посилання неправильне або кімнату вже видалено.', ['На головну', '/']);
-    if (inv.revoked_at) return page(res, 410, 'Запрошення відкликано', 'Власник кімнати скасував це запрошення. Попроси нове.', ['На головну', '/']);
+    if (!inv) return page(res, 404, 'inv.notFoundTitle', 'inv.notFoundText');
+    if (inv.revoked_at) return page(res, 410, 'inv.revokedTitle', 'inv.revokedText');
     if (inv.used_at) {
       if (inv.used_by === s.user.id) { res.writeHead(302, { Location: `/r/${inv.room_id}` }); return res.end(); }
-      return page(res, 410, 'Запрошення вже використано', 'Кожне запрошення спрацьовує один раз. Попроси власника кімнати надіслати нове.', ['На головну', '/']);
+      return page(res, 410, 'inv.usedTitle', 'inv.usedText');
     }
-    if (inv.expires_at < Date.now()) return page(res, 410, 'Запрошення прострочено', 'Запрошення діє 7 днів. Попроси власника кімнати надіслати нове.', ['На головну', '/']);
+    if (inv.expires_at < Date.now()) return page(res, 410, 'inv.expiredTitle', 'inv.expiredText');
     if (inv.github_id !== s.user.github_id)
-      return page(res, 403, 'Це запрошення не для тебе', `Його надіслали для @${inv.github_login}, а ти увійшов як @${s.user.login}. Перевір акаунт GitHub або попроси запрошення на свій логін.`, ['На головну', '/']);
+      return page(res, 403, 'inv.wrongTitle', 'inv.wrongText', { to: inv.github_login, me: s.user.login });
     const ok = db.tx(() => {
       const r = db.run('UPDATE invites SET used_at = ?, used_by = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL', Date.now(), s.user.id, inv.id);
       if (!r.changes) return false;
       db.run('INSERT OR IGNORE INTO members (room_id, user_id, role, added_at, last_read_id) VALUES (?,?,?,?,0)', inv.room_id, s.user.id, 'member', Date.now());
       return true;
     });
-    if (!ok) return page(res, 410, 'Запрошення вже використано', 'Кожне запрошення спрацьовує один раз.', ['На головну', '/']);
-    event(inv.room_id, `${s.user.name} тепер у кімнаті`);
+    if (!ok) return page(res, 410, 'inv.usedTitle', 'inv.usedShort');
+    event(inv.room_id, 'ev.joined', { name: s.user.name });
     push(memberIds(inv.room_id), 'rooms', {});
     res.writeHead(302, { Location: `/r/${inv.room_id}` }); res.end();
   });
@@ -349,26 +354,31 @@ function createApp(config) {
     const p = url.pathname;
     try {
       if (p === '/healthz') return send(res, 200, 'ok');
-      if (p === '/config.json') return send(res, 200, { devLogin: !!config.devLogin, github: !!config.github.clientId, baseUrl: config.baseUrl });
+      if (p === '/config.json') return send(res, 200, { devLogin: !!config.devLogin, github: !!config.github.clientId, baseUrl: config.baseUrl, lang: langOf(req) });
+      res.slopLang = langOf(req);
       const s = auth.session(req);
       for (const [method, re, fn] of routes) {
         if (method !== req.method) continue;
         const m = p.match(re); if (!m) continue;
         const isApi = p.startsWith('/api/') && !p.startsWith('/api/agent/') && p !== '/api/pair' && !p.startsWith('/api/pair/');
-        if (isApi && !s) throw new HttpError(401, 'Потрібен вхід.');
+        if (isApi && !s) throw new HttpError(401, 'err.signIn');
         if (isApi && req.method !== 'GET') auth.checkCsrf(req, s);
         return await fn({ req, res, url, s, m });
       }
       if (req.method === 'GET' && !p.startsWith('/api/')) {
         if (p === '/' || p === '/new' || /^\/r\/[\w]{12}$/.test(p)) return serveStatic(res, 'index.html', { html: true });
         if (/^\/[\w.-]+(\/[\w.-]+)*$/.test(p) && !p.includes('..')) return serveStatic(res, p.slice(1));
-        return page(res, 404, 'Такої сторінки немає', 'Можливо, посилання застаріло або в ньому помилка.', ['На головну', '/']);
+        return page(res, 404, 'page.404Title', 'page.404Text');
       }
-      return send(res, 404, { error: 'Немає такого шляху.' });
+      return send(res, 404, { error: t(res.slopLang, 'err.notFound') });
     } catch (e) {
-      if (e instanceof HttpError) { if (!res.headersSent) send(res, e.status, { error: e.message, ...(e.extra || {}) }); return; }
+      if (e instanceof HttpError) {
+        const { vars, ...rest } = e.extra || {};
+        if (!res.headersSent) send(res, e.status, { error: t(req.slopLang || res.slopLang || 'en', e.message, vars), ...rest });
+        return;
+      }
       console.error(e);
-      if (!res.headersSent) send(res, 500, { error: 'Помилка сервера.' });
+      if (!res.headersSent) send(res, 500, { error: t(langOf(req), 'err.server') });
     }
   }
 

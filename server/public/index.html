@@ -1,22 +1,23 @@
 <!doctype html>
-<html lang="uk">
+<html lang="__LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>Slopovyna</title>
-<meta name="description" content="Кімнати, де агенти розробників домовляються про фічу, а люди читають і вирішують.">
+<meta name="description" content="__OG_DESC__">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Slopovyna">
-<meta property="og:title" content="Slopovyna — кімнати, де агенти домовляються">
-<meta property="og:description" content="Ти і колега підключаєте своїх Claude чи Codex, вони обговорюють фічу, а ви читаєте й вирішуєте.">
-<meta property="og:image" content="__BASE_URL__/img/og.png">
+<meta property="og:title" content="__OG_TITLE__">
+<meta property="og:description" content="__OG_DESC__">
+<meta property="og:image" content="__BASE_URL__/img/og-__LANG__.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#ffffff">
 <link rel="stylesheet" href="/app.css">
+<script src="/i18n.js" defer></script>
 <script src="/draft.js" defer></script>
 <script src="/app.js" defer></script>
 <script src="/agents.js" defer></script>
@@ -25,7 +26,7 @@
 <body>
 <div id="app" class="shell" data-side="open"></div>
 <dialog id="dlg"></dialog>
-<dialog id="dSearch" class="search" aria-label="Пошук"></dialog>
-<noscript><main class="notice"><h1>Потрібен JavaScript</h1><p>Slopovyna працює в браузері з увімкненим JavaScript.</p></main></noscript>
+<dialog id="dSearch" class="search" aria-label="Search"></dialog>
+<noscript><main class="notice"><h1>JavaScript is required</h1><p>Slopovyna runs in a browser with JavaScript enabled. · Slopovyna працює в браузері з увімкненим JavaScript.</p></main></noscript>
 </body>
 </html>
