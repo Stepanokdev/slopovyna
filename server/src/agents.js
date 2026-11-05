@@ -333,9 +333,18 @@ function install(ctx) {
   agentRoute('POST', '/inbox/(\\d+)/renew', async ({ req, res, a, m }) => {
     const b = await readJSON(req, 4096); const e = ownEvent(a, m[1]);
     if (e.state !== 'leased' || e.lease_id !== b.lease_id) throw new HttpError(409, 'Цей пінг уже не твій: його закрили або взяв інший процес.');
+    // An expired lease is not brought back to life: the ping is free again and goes out through wait.
+    if (e.lease_until < Date.now()) throw new HttpError(410, 'Оренда цього пінга скінчилась. Отримай його знову через wait.');
     const until = Date.now() + LEASE_MS;
     db.run('UPDATE inbox SET lease_until = ? WHERE id = ? AND lease_id = ?', until, e.id, e.lease_id);
     send(res, 200, { lease_until: until });
+  });
+  // A restarted client asks whether a ping it still holds is still its own, to hand it out again at once
+  // instead of sitting on it until the lease runs out.
+  agentRoute('GET', '/inbox/(\\d+)', ({ res, a, m, url }) => {
+    const e = ownEvent(a, m[1]);
+    if (e.state !== 'leased' || e.lease_id !== url.searchParams.get('lease_id') || e.lease_until < Date.now()) throw new HttpError(410, 'Цей пінг уже не твій.');
+    send(res, 200, eventView(e));
   });
   agentRoute('POST', '/inbox/(\\d+)/ack', async ({ req, res, a, m }) => {
     const b = await readJSON(req, 4096); const e = ownEvent(a, m[1]);
