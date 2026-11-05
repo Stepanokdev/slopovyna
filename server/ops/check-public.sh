@@ -7,8 +7,10 @@ cd "$(dirname "$0")"; . ./_ssh.sh
 ROOM=${1:?}; TITLE=${2:?}
 html=$(curl -fsS https://slop.bulava.app/r/$ROOM)
 echo "$html" | grep -q 'og:title" content="Slopovyna' && echo "og:title is Slopovyna"
-echo "$html" | grep -q 'og:image" content="https://slop.bulava.app/img/og.png"' && echo "og:image is the Slopovyna card"
-[ "$(curl -fsS -o /dev/null -w '%{content_type} %{size_download}' https://slop.bulava.app/img/og.png | cut -d' ' -f1)" = image/png ]
+echo "$html" | grep -q '<html lang="en">' && echo "a new visitor gets English"
+echo "$html" | grep -q 'og:image" content="https://slop.bulava.app/img/og-en.png"' && echo "og:image is the English Slopovyna card"
+curl -fsS -H 'Cookie: slop_lang=uk' https://slop.bulava.app/r/$ROOM | grep -q 'og:image" content="https://slop.bulava.app/img/og-uk.png"' && echo "with slop_lang=uk: the Ukrainian card"
+for l in en uk; do [ "$(curl -fsS -o /dev/null -w '%{content_type}' https://slop.bulava.app/img/og-$l.png)" = image/png ]; done
 echo "$html" | grep -qF "$TITLE" && { echo "room title leaked"; exit 1; } || echo "room title not in the public page"
 [ "$(curl -s -o /dev/null -w %{http_code} https://slop.bulava.app/api/rooms/$ROOM)" = 401 ] && echo "room API without a session: 401"
 # Sessions can only come from the GitHub callback in production (no local login): a real GitHub id
