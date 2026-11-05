@@ -33,10 +33,12 @@ async function idbDel(store, key) { try { const d = await idb(); await new Promi
 // ---------------------------------------------------------------- attaching
 let chips = [];                 // { key, file, state: 'uploading'|'ready'|'error', id, error }
 let syncComposer = () => {};
+const here = () => chips.filter(c => S.room && c.room === S.room.id);
 function renderChips() {
-  const el = $('#chips'); if (!el) return;
-  el.className = chips.length ? 'chips' : '';
-  el.innerHTML = chips.map(c => `<span class="chip ${c.state}" data-key="${c.key}">${c.state === 'uploading' ? '<span class="spin" aria-hidden="true"></span>' : DOC}
+  const el = $('#chips'); if (!el) return syncComposer();
+  const mine = S.room && $('#attachSlot')?.children.length ? here() : [];
+  el.className = mine.length ? 'chips' : '';
+  el.innerHTML = mine.map(c => `<span class="chip ${c.state}" data-key="${c.key}">${c.state === 'uploading' ? '<span class="spin" aria-hidden="true"></span>' : DOC}
       <span class="cn">${esc(c.file.name)}</span><span class="cs">${c.state === 'error' ? esc(c.error) : c.state === 'uploading' ? 'завантажую…' : size(c.file.size)}</span>
       ${c.state === 'error' ? `<button type="button" data-act="chip-retry" data-key="${c.key}">Повторити</button>` : ''}
       <button type="button" class="x" data-act="chip-rm" data-key="${c.key}" aria-label="Прибрати ${esc(c.file.name)}">${I.x}</button></span>`).join('');
@@ -46,7 +48,8 @@ function add(files) {
   for (const f of files) {
     if (!f || !f.size) continue;
     const named = f.name && f.name !== 'image.png' ? f : new File([f], `screenshot-${new Date().toTimeString().slice(0, 8).replace(/:/g, '')}.${(f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`, { type: f.type });
-    const c = { key: Math.random().toString(36).slice(2), file: named, state: 'uploading', room: S.room.id };
+    // A file belongs to the room it was added in, for its whole upload, whatever is open meanwhile.
+    const c = { key: Math.random().toString(36).slice(2), file: named, state: 'uploading', room: S.room.id, viaBrowser: !S.room?.extra?.files?.storage };
     chips.push(c); upload(c);
   }
   renderChips();
@@ -55,17 +58,18 @@ async function upload(c) {
   c.state = 'uploading'; c.error = ''; renderChips();
   try {
     const buf = await c.file.arrayBuffer();
-    const noStorage = !S.room?.extra?.files?.storage;
+    const roomId = c.room;
     // Without a bucket the file is handed out from this browser, so it must be safely kept here first.
     const CANT_KEEP = 'Браузер не зміг зберегти файл (немає місця або приватний режим), тож інші його не отримають. Звільни місце або попроси власника кімнати підключити сховище.';
-    if (noStorage && !(await idbPut('own', `pending:${c.key}`, { blob: c.file, name: c.file.name }))) throw new Error(CANT_KEEP);
-    const reg = await api('POST', `/api/rooms/${S.room.id}/attachments`, { name: c.file.name, size: c.file.size, sha256: await sha256(buf), mime: c.file.type || 'application/octet-stream' });
+    if (c.viaBrowser && !(await idbPut('own', `pending:${c.key}`, { blob: c.file, name: c.file.name }))) throw new Error(CANT_KEEP);
+    const reg = await api('POST', `/api/rooms/${roomId}/attachments`, { name: c.file.name, size: c.file.size, sha256: await sha256(buf), mime: c.file.type || 'application/octet-stream' });
     if (reg.mode === 'storage') {
       let put;
       try { put = await fetch(reg.put_url, { method: 'PUT', body: c.file }); } catch { throw new Error('сховище кімнати не прийняло файл (CORS?)'); }
       if (!put.ok) throw new Error(`сховище відповіло ${put.status}`);
-      await api('POST', `/api/rooms/${S.room.id}/attachments/${reg.id}/complete`, {});
+      await api('POST', `/api/rooms/${roomId}/attachments/${reg.id}/complete`, {});
     } else {
+      // the room may have lost its bucket meanwhile; either way the file must be kept here now
       const kept = await idbPut('own', reg.id, { blob: c.file, name: c.file.name });
       idbDel('own', `pending:${c.key}`);
       if (!kept) throw new Error(CANT_KEEP);
@@ -93,15 +97,15 @@ window.Slop.setComposer({
   slot: () => `<button type="button" class="rb" data-act="attach" aria-label="Прикріпити файл або скриншот" title="Файл або скриншот">${CLIP}</button><input type="file" id="fin" multiple hidden>`,
   bind: sync => {
     syncComposer = sync;
-    chips = chips.filter(c => c.room === S.room.id);
     $('#fin').addEventListener('change', e => { add([...e.target.files]); e.target.value = ''; });
     $('#ta').addEventListener('paste', e => { const f = [...(e.clipboardData?.files || [])]; if (f.length) { e.preventDefault(); add(f); } });
     bindDrop();
     renderChips();
   },
-  ready: () => !chips.some(c => c.state !== 'ready'),
-  collect: () => { const ids = chips.filter(c => c.state === 'ready').map(c => c.id); return { hasFiles: ids.length > 0, body: ids.length ? { attachments: ids } : {} }; },
-  reset: () => { chips = []; renderChips(); },
+  // only the room on screen counts: the "new room" screen and other rooms are never blocked by these chips
+  ready: () => !here().some(c => c.state !== 'ready'),
+  collect: () => { const ids = here().filter(c => c.state === 'ready').map(c => c.id); return { hasFiles: ids.length > 0, body: ids.length ? { attachments: ids } : {} }; },
+  reset: () => { const room = S.room?.id; chips = chips.filter(c => c.room !== room); renderChips(); },
 });
 
 // ---------------------------------------------------------------- showing files under messages

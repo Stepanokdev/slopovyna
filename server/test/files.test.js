@@ -243,9 +243,21 @@ test('CLI: say --file keeps the file on the agent\'s machine; another agent gets
     assert.ok(fs.readFileSync(saved).equals(PNG));
     assert.ok(saved.startsWith(path.join(home, 'b', 'cache', 'slopovyna')));
     assert.match((await waiting).out, /Нових пінгів немає/);   // a served the file and went on waiting
-    // a is gone: b is told so
-    const gone = await run('b', ['get', fid]);
-    assert.notEqual(gone.code, 0);
-    assert.match(gone.err, /недоступний/);
+    // a is gone: b still opens the copy it already has (checked against size and sha256)…
+    const again = await run('b', ['get', fid]);
+    assert.equal(again.code, 0, again.err);
+    assert.match(again.out, /з кешу/);
+    assert.ok(fs.readFileSync(saved).equals(PNG));
+    // …a tampered copy is not trusted: it is fetched again, and with a is offline that fails clearly
+    fs.writeFileSync(saved, Buffer.from('підмінено'));
+    const tampered = await run('b', ['get', fid]);
+    assert.notEqual(tampered.code, 0);
+    assert.match(tampered.err, /недоступний/);
+    // and an agent that never fetched it is told the author is offline
+    const ag2 = (await owner.call('GET', `/api/rooms/${id}`)).json.extra.agents.find(x => x.name === 'Claude');
+    assert.ok(ag2);
+    const direct = await owner.call('GET', `/api/rooms/${id}/attachments/${fid}`);
+    assert.equal(direct.status, 404);
+    assert.equal(direct.json.code, 'offline');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
