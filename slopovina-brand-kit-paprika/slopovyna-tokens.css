@@ -1,0 +1,114 @@
+/* Slopovyna design tokens v0.1. Default: Paprika / light. */
+:root {
+  --paper: #F6F3EA;
+  --surface: #FFFDF7;
+  --ink: #252820;
+  --muted: #65695D;
+  --line: #D9D7CB;
+  --control: #878C7D;
+  --success: #4F6644;
+  --success-soft: #E3EADB;
+  --warning: #8A5A1C;
+  --warning-soft: #F4E7CC;
+  --error: #A83F36;
+  --error-soft: #F4DED6;
+  --neutral-soft: #E3E3D9;
+  --accent: #AE4930;
+  --accent-hover: #913B28;
+  --accent-soft: #F1DCD2;
+  --accent-text: #913B28;
+  --on-accent: #FFFFFF;
+}
+:root[data-palette="paprika"] {
+  --accent: #AE4930;
+  --accent-hover: #913B28;
+  --accent-soft: #F1DCD2;
+  --accent-text: #913B28;
+  --on-accent: #FFFFFF;
+}
+:root[data-palette="olive"] {
+  --accent: #59653F;
+  --accent-hover: #475233;
+  --accent-soft: #E4E8D7;
+  --accent-text: #475233;
+  --on-accent: #FFFFFF;
+}
+:root[data-palette="ink"] {
+  --accent: #353A31;
+  --accent-hover: #252820;
+  --accent-soft: #E3E3D9;
+  --accent-text: #252820;
+  --on-accent: #FFFFFF;
+}
+:root[data-theme="dark"] {
+  --paper: #20231D;
+  --surface: #2A2E25;
+  --ink: #F6F3EA;
+  --muted: #B7BBAE;
+  --line: #444A3D;
+  --control: #7E8774;
+  --success: #B4CAA3;
+  --success-soft: #313D2C;
+  --warning: #E4C082;
+  --warning-soft: #423A26;
+  --error: #F1AAA0;
+  --error-soft: #482D29;
+  --neutral-soft: #383D32;
+  --accent: #DF8B6A;
+  --accent-hover: #F1A385;
+  --accent-soft: #472E24;
+  --accent-text: #F3B198;
+  --on-accent: #252820;
+}
+:root[data-theme="dark"][data-palette="paprika"] {
+  --accent: #DF8B6A;
+  --accent-hover: #F1A385;
+  --accent-soft: #472E24;
+  --accent-text: #F3B198;
+  --on-accent: #252820;
+}
+:root[data-theme="dark"][data-palette="olive"] {
+  --accent: #A7B682;
+  --accent-hover: #BDCB9A;
+  --accent-soft: #354029;
+  --accent-text: #C5D5A3;
+  --on-accent: #252820;
+}
+:root[data-theme="dark"][data-palette="ink"] {
+  --accent: #E8D8B6;
+  --accent-hover: #F5E7CC;
+  --accent-soft: #3D3A2E;
+  --accent-text: #E8D8B6;
+  --on-accent: #252820;
+}
+:root {
+  --font-display: "Bricolage Grotesque", Manrope, sans-serif;
+  --font-body: Manrope, sans-serif;
+  --font-mono: "DM Mono", Manrope, monospace;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-24: 96px;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-full: 999px;
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-h2: 32px;
+  --text-h1: 40px;
+  --text-display: 64px;
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 320ms;
+  --ease: cubic-bezier(.2,.7,.2,1);
+}
+@media (prefers-reduced-motion: reduce) { :root { --motion-fast: 0ms; --motion-base: 0ms; --motion-slow: 0ms; } }

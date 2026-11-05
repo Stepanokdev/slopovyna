@@ -1,0 +1,177 @@
+{
+  "name": "Slopovyna",
+  "version": "0.1",
+  "defaultPalette": "paprika",
+  "themes": {
+    "light": {
+      "paper": "#F6F3EA",
+      "surface": "#FFFDF7",
+      "ink": "#252820",
+      "muted": "#65695D",
+      "line": "#D9D7CB",
+      "control": "#878C7D",
+      "success": "#4F6644",
+      "success-soft": "#E3EADB",
+      "warning": "#8A5A1C",
+      "warning-soft": "#F4E7CC",
+      "error": "#A83F36",
+      "error-soft": "#F4DED6",
+      "neutral-soft": "#E3E3D9"
+    },
+    "dark": {
+      "paper": "#20231D",
+      "surface": "#2A2E25",
+      "ink": "#F6F3EA",
+      "muted": "#B7BBAE",
+      "line": "#444A3D",
+      "control": "#7E8774",
+      "success": "#B4CAA3",
+      "success-soft": "#313D2C",
+      "warning": "#E4C082",
+      "warning-soft": "#423A26",
+      "error": "#F1AAA0",
+      "error-soft": "#482D29",
+      "neutral-soft": "#383D32"
+    }
+  },
+  "palettes": {
+    "paprika": {
+      "light": {
+        "accent": "#AE4930",
+        "accent-hover": "#913B28",
+        "accent-soft": "#F1DCD2",
+        "accent-text": "#913B28",
+        "on-accent": "#FFFFFF"
+      },
+      "dark": {
+        "accent": "#DF8B6A",
+        "accent-hover": "#F1A385",
+        "accent-soft": "#472E24",
+        "accent-text": "#F3B198",
+        "on-accent": "#252820"
+      }
+    },
+    "olive": {
+      "light": {
+        "accent": "#59653F",
+        "accent-hover": "#475233",
+        "accent-soft": "#E4E8D7",
+        "accent-text": "#475233",
+        "on-accent": "#FFFFFF"
+      },
+      "dark": {
+        "accent": "#A7B682",
+        "accent-hover": "#BDCB9A",
+        "accent-soft": "#354029",
+        "accent-text": "#C5D5A3",
+        "on-accent": "#252820"
+      }
+    },
+    "ink": {
+      "light": {
+        "accent": "#353A31",
+        "accent-hover": "#252820",
+        "accent-soft": "#E3E3D9",
+        "accent-text": "#252820",
+        "on-accent": "#FFFFFF"
+      },
+      "dark": {
+        "accent": "#E8D8B6",
+        "accent-hover": "#F5E7CC",
+        "accent-soft": "#3D3A2E",
+        "accent-text": "#E8D8B6",
+        "on-accent": "#252820"
+      }
+    }
+  },
+  "typography": {
+    "display": {
+      "family": "Bricolage Grotesque",
+      "weights": [
+        600,
+        650,
+        800
+      ],
+      "use": "Latin display headings and wordmark"
+    },
+    "body": {
+      "family": "Manrope",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "use": "UI, Russian and Ukrainian text"
+    },
+    "mono": {
+      "family": "DM Mono",
+      "weights": [
+        400
+      ],
+      "use": "Latin code, metadata and identifiers; Manrope fallback for Cyrillic"
+    },
+    "sizePx": {
+      "xs": 12,
+      "sm": 14,
+      "base": 16,
+      "lg": 20,
+      "xl": 24,
+      "h2": 32,
+      "h1": 40,
+      "display": 64
+    },
+    "lineHeight": {
+      "display": 1,
+      "heading": 1.15,
+      "body": 1.65,
+      "mono": 1.4
+    },
+    "tracking": {
+      "display": "-0.04em",
+      "heading": "-0.03em",
+      "body": "0",
+      "mono": "0.02em"
+    }
+  },
+  "spacing": {
+    "1": 4,
+    "2": 8,
+    "3": 12,
+    "4": 16,
+    "6": 24,
+    "8": 32,
+    "12": 48,
+    "16": 64,
+    "24": 96
+  },
+  "radius": {
+    "sm": "6px",
+    "md": "12px",
+    "lg": "20px",
+    "full": "999px"
+  },
+  "motion": {
+    "fastMs": 120,
+    "baseMs": 180,
+    "slowMs": 320,
+    "easing": "cubic-bezier(.2,.7,.2,1)",
+    "reducedMotion": "Respect prefers-reduced-motion: reduce"
+  },
+  "layout": {
+    "contentMaxPx": 1330,
+    "sidebarPx": 232,
+    "mobileBreakpointPx": 760,
+    "smallBreakpointPx": 540
+  },
+  "logo": {
+    "symbolMinPx": 24,
+    "lockupMinPx": 140,
+    "clearspace": "one eye width",
+    "favicon": "simplified eyes at 16px"
+  },
+  "selected": {
+    "palette": "paprika",
+    "theme": "light"
+  }
+}
