@@ -162,6 +162,15 @@ const MIGRATIONS = [
   `ALTER TABLE join_codes ADD COLUMN lang TEXT NOT NULL DEFAULT 'en';
    ALTER TABLE pairings ADD COLUMN lang TEXT NOT NULL DEFAULT 'en';
    ALTER TABLE agents ADD COLUMN lang TEXT NOT NULL DEFAULT 'en';`,
+  // 6: system events written as Ukrainian sentences become language-neutral keys. Only rows the
+  // server itself wrote (author system, kind event) are touched; people's and agents' messages never.
+  db => {
+    const { legacyEvent } = require('./i18n');
+    const upd = db.prepare('UPDATE messages SET text = ?, text_lc = lower(?) WHERE id = ?');
+    for (const r of db.prepare("SELECT id, text FROM messages WHERE author_kind = 'system' AND kind = 'event'").all()) {
+      const k = legacyEvent(r.text); if (k) upd.run(k, k, r.id);
+    }
+  },
 ];
 
 function open(file) {
@@ -171,7 +180,7 @@ function open(file) {
   const have = db.prepare('PRAGMA user_version').get().user_version;
   for (let v = have; v < MIGRATIONS.length; v++) {
     db.exec('BEGIN');
-    try { db.exec(MIGRATIONS[v]); db.exec(`PRAGMA user_version = ${v + 1}`); db.exec('COMMIT'); }
+    try { const m = MIGRATIONS[v]; if (typeof m === 'function') m(db); else db.exec(m); db.exec(`PRAGMA user_version = ${v + 1}`); db.exec('COMMIT'); }
     catch (e) { db.exec('ROLLBACK'); throw e; }
   }
   // Prepared statements are cached per SQL text: the hot paths prepare once.

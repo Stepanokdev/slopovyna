@@ -22,7 +22,7 @@ function latinLeft(s) {
   return s.replace(/\{\w+\}/g, '').replace(/\b[a-z]+(_[a-z]+)+\b/g, '').replace(/<code>[^<]*<\/code>/g, '').replace(/<[^>]+>/g, '').replace(/https?:\/\/\S+/g, '').replace(/~\/\.\w+/g, '').replace(ALLOWED_LATIN, '').match(/[A-Za-z]{3,}/g) || [];
 }
 function clientCatalog() {
-  const ctx = { document: { cookie: '', documentElement: {} }, localStorage: { getItem() { return null; }, setItem() {} }, location: { protocol: 'http:' } };
+  const ctx = { document: { cookie: '', documentElement: {}, querySelector: () => null }, localStorage: { getItem() { return null; }, setItem() {} }, location: { protocol: 'http:' } };
   ctx.window = ctx; vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/i18n.js'), 'utf8'), ctx);
   return ctx.SlopI18n.catalog;
@@ -132,4 +132,63 @@ test('the CLI speaks its owner\'s language, and SLOPOVYNA_LANG switches it', asy
     assert.match((await run(['who'])).out, /^Люди:/);
     assert.match((await run(['who'], { SLOPOVYNA_LANG: 'en' })).out, /^People:/);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('upgrading a database from before two languages turns its Ukrainian system events into keys', () => {
+  const { open } = require('../src/db');
+  const { renderEvent } = require('../src/i18n');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'slop-i18n-db-')), 'old.db');
+  let d = open(file);
+  d.run("INSERT INTO users (id, github_id, login, name, avatar, created_at) VALUES (1, 7, 'ivan', 'Іван', '', 0)");
+  d.run("INSERT INTO rooms (id, title, owner_id, created_at, last_message_at) VALUES ('R', 'кімната', 1, 0, 0)");
+  const rows = [
+    ['system', 'system', 'event', 'Кімнату створено'],
+    ['system', 'system', 'event', 'Codex · Іван тепер у кімнаті'],
+    ['system', 'system', 'event', 'Марта більше не в кімнаті'],
+    ['system', 'system', 'event', 'Іван підключає своє сховище для файлів кімнати'],
+    ['system', 'system', 'event', 'Іван відключає сховище кімнати. Файли, що лежали в ньому, більше не відкриваються'],
+    ['system', 'system', 'event', 'Щось, чого сервер ніколи не писав'],
+    ['human', '1', 'message', 'Кімнату створено'],                      // a person typing the same words
+    ['agent', 'A', 'message', 'Іван тепер у кімнаті'],
+  ];
+  for (const [ak, ai, k, tx] of rows) d.run('INSERT INTO messages (room_id, author_kind, author_id, kind, text, text_lc, created_at) VALUES (?,?,?,?,?,?,0)', 'R', ak, ai, k, tx, tx.toLowerCase());
+  d.raw.exec('PRAGMA user_version = 5'); d.raw.close();
+  d = open(file);                                                         // the upgrade runs migration 6
+  const got = d.all('SELECT text FROM messages ORDER BY id').map(r => r.text);
+  assert.equal(d.get('PRAGMA user_version').user_version, 6);
+  assert.deepEqual(got.slice(0, 5).map(x => JSON.parse(x)), [
+    { k: 'ev.created', v: {} }, { k: 'ev.joined', v: { name: 'Codex · Іван' } }, { k: 'ev.left', v: { name: 'Марта' } },
+    { k: 'ev.storageOn', v: { name: 'Іван' } }, { k: 'ev.storageOff', v: { name: 'Іван' } }]);
+  assert.deepEqual(got.slice(5), ['Щось, чого сервер ніколи не писав', 'Кімнату створено', 'Іван тепер у кімнаті']);
+  assert.deepEqual(got.slice(0, 5).map(x => renderEvent('en', x)), ['Room created', 'Codex · Іван is now in the room', 'Марта is no longer in the room',
+    'Іван connected their own storage for this room’s files', 'Іван disconnected the room’s storage. Files that were in it no longer open']);
+  assert.deepEqual(got.slice(0, 3).map(x => renderEvent('uk', x)), ['Кімнату створено', 'Codex · Іван тепер у кімнаті', 'Марта більше не в кімнаті']);
+  d.raw.close();
+});
+
+test('switching language updates the page language and its preview at once, and a reload keeps it', () => {
+  function page(stored) {
+    const metas = {
+      'meta[name="description"]': 'x', 'meta[property="og:description"]': 'x', 'meta[property="og:title"]': 'x',
+      'meta[property="og:image"]': 'https://slop.example/img/og-en.png',
+    };
+    const els = Object.fromEntries(Object.entries(metas).map(([k, v]) => [k, { v, getAttribute() { return this.v; }, setAttribute(_, x) { this.v = x; } }]));
+    const store = { 'slop.lang': stored };
+    const doc = { cookie: '', documentElement: { lang: 'en' }, querySelector: s => els[s] || null };
+    const ctx = { document: doc, localStorage: { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = v; } }, location: { protocol: 'https:' } };
+    ctx.window = ctx; vm.createContext(ctx);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/i18n.js'), 'utf8'), ctx);
+    const read = () => ({ lang: doc.documentElement.lang, desc: els['meta[name="description"]'].v, ogDesc: els['meta[property="og:description"]'].v,
+      title: els['meta[property="og:title"]'].v, image: els['meta[property="og:image"]'].v });
+    return { I: ctx.SlopI18n, read, store, doc };
+  }
+  const S = require('../src/i18n').catalog;
+  const want = l => ({ lang: l, desc: S[l]['og.desc'], ogDesc: S[l]['og.desc'], title: S[l]['og.title'], image: `https://slop.example/img/og-${l}.png` });
+  const p = page(null);
+  assert.deepEqual(p.read(), want('en'));
+  p.I.set('uk'); assert.deepEqual(p.read(), want('uk')); assert.match(p.doc.cookie, /slop_lang=uk/);
+  p.I.set('en'); assert.deepEqual(p.read(), want('en'));
+  p.I.set('uk');
+  const again = page(p.store['slop.lang']);                                // the same browser after a reload
+  assert.deepEqual(again.read(), want('uk')); assert.equal(again.I.lang(), 'uk');
 });

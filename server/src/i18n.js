@@ -256,9 +256,25 @@ function t(lang, key, vars) {
 }
 // A system event is stored as a key and its values, so each reader sees it in their own language.
 const eventText = (key, vars) => JSON.stringify({ k: key, v: vars || {} });
+// Before there were two languages, system events were stored as Ukrainian sentences. These are
+// every sentence the server ever wrote; migration 6 turns them into keys so each reader sees their
+// own language. Anything that does not match is left exactly as it was.
+const LEGACY = [
+  [/^Кімнату створено$/, 'ev.created'],
+  [/^(.+) тепер у кімнаті$/, 'ev.joined'],
+  [/^(.+) більше не в кімнаті$/, 'ev.left'],
+  [/^(.+) підключає своє сховище для файлів кімнати$/, 'ev.storageOn'],
+  [/^(.+) відключає сховище кімнати\. Файли, що лежали в ньому, більше не відкриваються$/, 'ev.storageOff'],
+];
+function legacyEvent(text) {
+  if (typeof text !== 'string') return null;
+  for (const [re, key] of LEGACY) { const m = re.exec(text); if (m) return eventText(key, m[1] !== undefined ? { name: m[1] } : {}); }
+  return null;
+}
 function renderEvent(lang, text) {
   if (typeof text === 'string' && text.startsWith('{"k":')) { try { const e = JSON.parse(text); return t(lang, e.k, e.v); } catch {} }
-  return text;                                   // events written before there were two languages
+  const old = legacyEvent(text);
+  return old ? renderEvent(lang, old) : text;
 }
 
-module.exports = { t, langOf, pick, LANGS, eventText, renderEvent, catalog: M };
+module.exports = { t, langOf, pick, LANGS, eventText, legacyEvent, renderEvent, catalog: M };

@@ -6,6 +6,8 @@
 const M = {
   en: {
     'lang.switch': 'Мова: українська', 'lang.short': 'Українська', 'lang.code': 'УКР',
+    'og.title': 'Slopovyna — rooms where agents agree',
+    'og.desc': 'You and a colleague connect your Claude or Codex, they work out the feature, and you read along and decide.',
     // dates
     'day.today': 'Today', 'day.yesterday': 'Yesterday', 'grp.week': 'Previous 7 days', 'grp.month': 'Previous 30 days',
     // generic
@@ -106,6 +108,8 @@ const M = {
   },
   uk: {
     'lang.switch': 'Language: English', 'lang.short': 'English', 'lang.code': 'ENG',
+    'og.title': 'Slopovyna — кімнати, де агенти домовляються',
+    'og.desc': 'Ти і колега підключаєте своїх Claude чи Codex, вони обговорюють фічу, а ви читаєте й вирішуєте.',
     'day.today': 'Сьогодні', 'day.yesterday': 'Вчора', 'grp.week': 'Минулі 7 днів', 'grp.month': 'Минулі 30 днів',
     'g.close': 'Закрити', 'g.copy': 'Копіювати', 'g.copied': 'Скопійовано', 'g.done': 'Готово', 'g.cancel': 'Скасувати', 'g.retry': 'Повторити', 'g.remove': 'Прибрати',
     'g.error': 'Помилка {status}', 'g.copyFail': 'Не вдалося скопіювати. Виділи текст і скопіюй вручну.', 'g.code': 'код',
@@ -219,12 +223,23 @@ function set(l) {
   lang = l;
   try { localStorage.setItem('slop.lang', l); } catch {}
   document.cookie = `slop_lang=${l}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`;
-  document.documentElement.lang = l;
+  applyMeta();
   for (const f of listeners) f(l);
+}
+// The page's language and its preview (description, Open Graph title, text and card) follow the
+// chosen language at once, not only after the server renders the next page.
+function applyMeta() {
+  document.documentElement.lang = lang;
+  const put = (sel, v) => { const el = document.querySelector(sel); if (el) el.setAttribute('content', v); };
+  put('meta[name="description"]', t('og.desc'));
+  put('meta[property="og:description"]', t('og.desc'));
+  put('meta[property="og:title"]', t('og.title'));
+  const img = document.querySelector('meta[property="og:image"]');
+  if (img) img.setAttribute('content', img.getAttribute('content').replace(/\/img\/og-[a-z]+\.png$/, `/img/og-${lang}.png`));
 }
 // keep the cookie in step with the stored choice, so the server answers in the same language
 document.cookie = `slop_lang=${lang}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`;
-document.documentElement.lang = lang;
+applyMeta();
 
 window.SlopI18n = { t, event, set, lang: () => lang, locale: () => (lang === 'uk' ? 'uk' : 'en-GB'), onChange: f => listeners.push(f), catalog: M };
 })();
