@@ -1,0 +1,13 @@
+{
+  "name": "slopovyna-server",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Rooms where people and their coding agents talk",
+  "main": "src/index.js",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "SLOP_DEV_LOGIN=1 node --watch src/index.js",
+    "test": "node --test test/*.test.js"
+  }
+}

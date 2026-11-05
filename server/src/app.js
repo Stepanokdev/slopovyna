@@ -1,0 +1,368 @@
+// Slopovyna server: rooms where people and their agents talk. Plain node:http, node:sqlite, no deps.
+'use strict';
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const { open } = require('./db');
+const { makeAuth } = require('./auth');
+const { sha256, token, randomId, HttpError, readJSON, findSecret } = require('./util');
+
+const PUBLIC = path.join(__dirname, '..', 'public');
+const MAX_TEXT = 20000;
+const PAGE = 50;
+const INVITE_DAYS = 7;
+
+const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml', '.woff': 'font/woff', '.woff2': 'font/woff2', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.ico': 'image/x-icon' };
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https://avatars.githubusercontent.com; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com; object-src 'none'";
+
+function createApp(config) {
+  const db = open(config.dbFile);
+  const auth = makeAuth({ db, config });
+  const hooks = { onMessage: [] };        // later pieces (agents' inboxes) subscribe here
+
+  // ---------------------------------------------------------------- live updates (SSE per person)
+  const streams = new Map();              // user id -> Set<res>
+  function push(userIds, event, data) {
+    const line = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const uid of userIds) for (const res of streams.get(uid) || []) res.write(line);
+  }
+  const memberIds = roomId => db.all('SELECT user_id FROM members WHERE room_id = ?', roomId).map(r => r.user_id);
+  const heartbeat = setInterval(() => { for (const set of streams.values()) for (const res of set) res.write(': ping\n\n'); }, 25000);
+  heartbeat.unref();
+  const flush = setInterval(() => authorCache.clear(), 60000); flush.unref();
+
+  // ---------------------------------------------------------------- shapes
+  function userView(u) { return { kind: 'human', id: `u:${u.id}`, uid: u.id, name: u.name || u.login, login: u.login, avatar: u.avatar }; }
+  const authorCache = new Map();
+  function author(kind, id) {
+    const key = `${kind}:${id}`;
+    if (authorCache.has(key)) return authorCache.get(key);
+    let a;
+    if (kind === 'human') { const u = db.get('SELECT * FROM users WHERE id = ?', Number(id)); a = u ? userView(u) : { kind, id: key, name: 'Видалений акаунт' }; }
+    else if (kind === 'system') a = { kind, id: 'system', name: 'Slopovyna' };
+    else a = describeAgent ? describeAgent(id) : { kind, id: key, name: 'Агент' };
+    authorCache.set(key, a);
+    return a;
+  }
+  let describeAgent = null;
+  function messageView(m) {
+    return { id: m.id, room: m.room_id, kind: m.kind, text: m.text, at: m.created_at, author: author(m.author_kind, m.author_id),
+      mentions: db.all('SELECT target FROM mentions WHERE message_id = ?', m.id).map(r => r.target) };
+  }
+  function membership(roomId, userId) { return db.get('SELECT role, last_read_id FROM members WHERE room_id = ? AND user_id = ?', roomId, userId); }
+  function needMember(roomId, user) {
+    const m = membership(roomId, user.id);
+    if (!m) throw new HttpError(404, 'Кімнати не знайдено.');
+    return m;
+  }
+  function roomMembersView(roomId) {
+    return db.all(`SELECT u.*, m.role FROM members m JOIN users u ON u.id = m.user_id WHERE m.room_id = ? ORDER BY m.role = 'owner' DESC, m.added_at`, roomId)
+      .map(u => ({ ...userView(u), role: u.role }));
+  }
+
+  // ---------------------------------------------------------------- writing messages
+  function postMessage({ roomId, authorKind, authorId, text, kind = 'message', mentions = [], idem = null }) {
+    text = String(text || '').replace(/\r\n/g, '\n');
+    if (!text.trim()) throw new HttpError(400, 'Порожнє повідомлення.');
+    if (text.length > MAX_TEXT) throw new HttpError(413, `Задовге повідомлення: ${text.length} символів, межа ${MAX_TEXT}. Довгий текст краще надіслати файлом.`);
+    if (authorKind !== 'system') { const s = findSecret(text); if (s) throw new HttpError(422, `Схоже, у повідомленні ${s}. Прибери його: кімнату читають усі учасники та їхні агенти.`); }
+    if (idem) {
+      const dup = db.get('SELECT * FROM messages WHERE room_id = ? AND author_kind = ? AND author_id = ? AND idem_key = ?', roomId, authorKind, String(authorId), idem);
+      if (dup) return { message: messageView(dup), duplicate: true };
+    }
+    const valid = new Set(validTargets(roomId));
+    const targets = [...new Set((Array.isArray(mentions) ? mentions : []).map(String))].filter(t => valid.has(t) && t !== `${authorKind === 'human' ? 'u' : 'a'}:${authorId}`);
+    const now = Date.now();
+    const row = db.tx(() => {
+      const r = db.run('INSERT INTO messages (room_id, author_kind, author_id, kind, text, text_lc, idem_key, created_at) VALUES (?,?,?,?,?,?,?,?)',
+        roomId, authorKind, String(authorId), kind, text, text.toLowerCase(), idem, now);
+      const id = Number(r.lastInsertRowid);
+      for (const t of targets) db.run('INSERT INTO mentions (message_id, target) VALUES (?,?)', id, t);
+      db.run('UPDATE rooms SET last_message_at = ? WHERE id = ?', now, roomId);
+      if (authorKind === 'human') db.run('UPDATE members SET last_read_id = ? WHERE room_id = ? AND user_id = ?', id, roomId, Number(authorId));
+      const m = db.get('SELECT * FROM messages WHERE id = ?', id);
+      for (const h of hooks.onMessage) h(m, targets);   // same transaction: inbox events commit with the message
+      return m;
+    });
+    const view = messageView(row);
+    push(memberIds(roomId), 'message', view);
+    return { message: view, duplicate: false };
+  }
+  let validTargets = roomId => db.all('SELECT user_id FROM members WHERE room_id = ?', roomId).map(r => `u:${r.user_id}`);
+  const event = (roomId, text) => postMessage({ roomId, authorKind: 'system', authorId: 'system', kind: 'event', text });
+
+  // ---------------------------------------------------------------- rooms
+  function roomsFor(user) {
+    return db.all(`SELECT r.id, r.title, r.owner_id, r.created_at, r.last_message_at, m.role, m.last_read_id,
+                     (SELECT count(*) FROM messages x WHERE x.room_id = r.id AND x.id > m.last_read_id AND NOT (x.author_kind = 'human' AND x.author_id = ?)) AS unread,
+                     (SELECT count(*) FROM mentions mm JOIN messages x ON x.id = mm.message_id WHERE x.room_id = r.id AND x.id > m.last_read_id AND mm.target = ?) AS mentioned
+                   FROM members m JOIN rooms r ON r.id = m.room_id WHERE m.user_id = ? ORDER BY r.last_message_at DESC`, String(user.id), `u:${user.id}`, user.id);
+  }
+  function titleFrom(text) {
+    const line = text.split('\n').map(s => s.trim()).find(Boolean) || 'Нова кімната';
+    const clean = line.replace(/@\S+(?: · \S+)?/g, '').replace(/[*`#>_]/g, '').trim() || 'Нова кімната';
+    return clean.length > 60 ? clean.slice(0, 57).replace(/\s+\S*$/, '') + '…' : clean;
+  }
+  function createRoom(user, { title, text }) {
+    text = String(text || '').trim();
+    const t = String(title || '').trim().slice(0, 80) || (text ? titleFrom(text) : '');
+    if (!t) throw new HttpError(400, 'Напиши, про що кімната.');
+    if (text) { const s = findSecret(text); if (s) throw new HttpError(422, `Схоже, у повідомленні ${s}. Прибери його.`); }
+    const id = randomId(12), now = Date.now();
+    db.tx(() => {
+      db.run('INSERT INTO rooms (id, title, owner_id, created_at, last_message_at) VALUES (?,?,?,?,?)', id, t, user.id, now, now);
+      db.run('INSERT INTO members (room_id, user_id, role, added_at) VALUES (?,?,?,?)', id, user.id, 'owner', now);
+    });
+    event(id, 'Кімнату створено');
+    if (text) postMessage({ roomId: id, authorKind: 'human', authorId: user.id, text });
+    return id;
+  }
+
+  // ---------------------------------------------------------------- http plumbing
+  function send(res, code, body, headers = {}) {
+    const isObj = body !== null && typeof body === 'object' && !Buffer.isBuffer(body);
+    res.writeHead(code, { 'Content-Type': isObj ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', ...headers });
+    res.end(isObj ? JSON.stringify(body) : body);
+  }
+  function serveStatic(res, rel, { html = false } = {}) {
+    const file = path.join(PUBLIC, rel);
+    if (!file.startsWith(PUBLIC + path.sep)) return send(res, 404, 'Not found');
+    fs.readFile(file, (err, buf) => {
+      if (err) return send(res, 404, 'Not found');
+      const ext = path.extname(file);
+      send(res, 200, buf, { 'Content-Type': TYPES[ext] || 'application/octet-stream',
+        'Cache-Control': html ? 'no-store' : (/\.(woff2?|png|webp|jpg)$/.test(ext) ? 'public, max-age=604800' : 'no-cache'),
+        'Content-Security-Policy': CSP, 'X-Frame-Options': 'DENY',
+        ...(config.baseUrl.startsWith('https://') ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}) });
+    });
+  }
+  function page(res, code, title, text, link) {
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const html = `<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Slopovyna</title><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/app.css"></head>
+<body class="plain"><main class="notice"><img src="/mascot.svg" alt="" width="56"><h1>${esc(title)}</h1><p>${esc(text)}</p>${link ? `<a class="btn primary" href="${esc(link[1])}">${esc(link[0])}</a>` : ''}</main></body></html>`;
+    send(res, code, html, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': CSP });
+  }
+
+  const routes = [];                       // [method, regex, handler(ctx)]
+  const route = (method, re, fn) => routes.push([method, re, fn]);
+  const ctxApi = { db, auth, config, push, postMessage, event, membership, needMember, author, authorCache, roomMembersView, memberIds, route, hooks, send, page, userView,
+    setValidTargets: f => { validTargets = f; }, getValidTargets: () => validTargets, setDescribeAgent: f => { describeAgent = f; }, streams };
+
+  // ---------------------------------------------------------------- routes: auth
+  route('GET', /^\/auth\/github$/, ({ req, res, url }) => auth.begin(req, res, url));
+  route('GET', /^\/auth\/callback$/, async ({ req, res, url }) => {
+    try { await auth.callback(req, res, url); }
+    catch (e) { if (e instanceof HttpError) return page(res, e.status, 'Не вийшло увійти', e.message, ['Спробувати ще раз', '/auth/github']); throw e; }
+  });
+  route('GET', /^\/auth\/dev$/, ({ req, res, url }) => auth.devLogin(req, res, url));
+  route('POST', /^\/auth\/logout$/, ({ req, res, s }) => { if (s) auth.checkCsrf(req, s); send(res, 200, { ok: true }, { 'Set-Cookie': auth.logout(req) }); });
+
+  // ---------------------------------------------------------------- routes: API for people
+  route('GET', /^\/api\/me$/, ({ res, s }) => send(res, 200, { user: userView(s.user), csrf: s.csrf, devLogin: !!config.devLogin }));
+
+  route('GET', /^\/api\/rooms$/, ({ res, s }) => send(res, 200, { rooms: roomsFor(s.user) }));
+  route('POST', /^\/api\/rooms$/, async ({ req, res, s }) => {
+    const b = await readJSON(req);
+    const id = createRoom(s.user, b);
+    push([s.user.id], 'rooms', {});
+    send(res, 201, { id });
+  });
+  route('GET', /^\/api\/rooms\/([\w]{12})$/, ({ res, s, m }) => {
+    const me = needMember(m[1], s.user);
+    const r = db.get('SELECT * FROM rooms WHERE id = ?', m[1]);
+    send(res, 200, { room: { id: r.id, title: r.title, owner: r.owner_id, created_at: r.created_at, role: me.role, last_read_id: me.last_read_id }, members: roomMembersView(r.id), extra: extraRoomInfo(r.id, s.user) });
+  });
+  let extraRoomInfo = () => ({});
+  ctxApi.setExtraRoomInfo = f => { extraRoomInfo = f; };
+  route('PATCH', /^\/api\/rooms\/([\w]{12})$/, async ({ req, res, s, m }) => {
+    const me = needMember(m[1], s.user);
+    if (me.role !== 'owner') throw new HttpError(403, 'Назву міняє лише власник кімнати.');
+    const b = await readJSON(req);
+    const t = String(b.title || '').trim().slice(0, 80);
+    if (!t) throw new HttpError(400, 'Назва порожня.');
+    db.run('UPDATE rooms SET title = ? WHERE id = ?', t, m[1]);
+    push(memberIds(m[1]), 'rooms', {});
+    send(res, 200, { ok: true });
+  });
+  route('DELETE', /^\/api\/rooms\/([\w]{12})$/, ({ res, s, m }) => {
+    const me = needMember(m[1], s.user);
+    if (me.role !== 'owner') throw new HttpError(403, 'Видалити кімнату може лише власник.');
+    const ids = memberIds(m[1]);
+    for (const h of hooks.onRoomDelete || []) h(m[1]);
+    db.run('DELETE FROM rooms WHERE id = ?', m[1]);
+    push(ids, 'rooms', {});
+    send(res, 200, { ok: true });
+  });
+
+  route('GET', /^\/api\/rooms\/([\w]{12})\/messages$/, ({ res, s, m, url }) => {
+    needMember(m[1], s.user);
+    send(res, 200, listMessages(m[1], url));
+  });
+  function listMessages(roomId, url) {
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || PAGE));
+    const before = Number(url.searchParams.get('before')) || 0, after = Number(url.searchParams.get('after')) || 0, around = Number(url.searchParams.get('around')) || 0;
+    let rows;
+    if (after) rows = db.all('SELECT * FROM messages WHERE room_id = ? AND id > ? ORDER BY id ASC LIMIT ?', roomId, after, limit);
+    else if (around) {
+      const older = db.all('SELECT * FROM messages WHERE room_id = ? AND id < ? ORDER BY id DESC LIMIT ?', roomId, around, Math.floor(limit / 2)).reverse();
+      const newer = db.all('SELECT * FROM messages WHERE room_id = ? AND id >= ? ORDER BY id ASC LIMIT ?', roomId, around, Math.ceil(limit / 2));
+      rows = older.concat(newer);
+    } else if (before) rows = db.all('SELECT * FROM messages WHERE room_id = ? AND id < ? ORDER BY id DESC LIMIT ?', roomId, before, limit).reverse();
+    else rows = db.all('SELECT * FROM messages WHERE room_id = ? ORDER BY id DESC LIMIT ?', roomId, limit).reverse();
+    const first = rows.length ? rows[0].id : 0, last = rows.length ? rows[rows.length - 1].id : 0;
+    const hasOlder = !!(first && db.get('SELECT 1 FROM messages WHERE room_id = ? AND id < ? LIMIT 1', roomId, first));
+    const hasNewer = !!(last && db.get('SELECT 1 FROM messages WHERE room_id = ? AND id > ? LIMIT 1', roomId, last));
+    return { messages: rows.map(messageView), has_older: hasOlder, has_newer: hasNewer };
+  }
+  ctxApi.listMessages = listMessages;
+
+  route('POST', /^\/api\/rooms\/([\w]{12})\/messages$/, async ({ req, res, s, m }) => {
+    needMember(m[1], s.user);
+    const b = await readJSON(req);
+    humanRate(s.user.id);
+    const idem = typeof b.idem === 'string' && /^[\w-]{8,64}$/.test(b.idem) ? b.idem : null;
+    const kind = b.kind === 'summary' ? 'summary' : 'message';
+    const r = postMessage({ roomId: m[1], authorKind: 'human', authorId: s.user.id, text: b.text, kind, mentions: b.mentions, idem });
+    send(res, r.duplicate ? 200 : 201, r.message);
+  });
+  const rate = new Map();
+  function humanRate(uid) {
+    const now = Date.now(), list = (rate.get(uid) || []).filter(t => now - t < 10000);
+    if (list.length >= 15) throw new HttpError(429, 'Занадто швидко. Зачекай кілька секунд.');
+    list.push(now); rate.set(uid, list);
+  }
+  route('POST', /^\/api\/rooms\/([\w]{12})\/read$/, async ({ req, res, s, m }) => {
+    needMember(m[1], s.user);
+    const b = await readJSON(req);
+    const id = Math.max(0, Number(b.last_id) || 0);
+    db.run('UPDATE members SET last_read_id = max(last_read_id, ?) WHERE room_id = ? AND user_id = ?', id, m[1], s.user.id);
+    send(res, 200, { ok: true });
+  });
+
+  // members & invites
+  route('POST', /^\/api\/rooms\/([\w]{12})\/invites$/, async ({ req, res, s, m }) => {
+    const me = needMember(m[1], s.user);
+    if (me.role !== 'owner') throw new HttpError(403, 'Запрошує лише власник кімнати.');
+    const b = await readJSON(req);
+    const login = String(b.github_login || '').trim().replace(/^@/, '');
+    if (!/^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i.test(login)) throw new HttpError(400, 'GitHub-логін складається з літер, цифр і дефісів, до 39 символів.');
+    const gh = await auth.resolveGithubLogin(login);
+    const already = db.get('SELECT 1 FROM members mm JOIN users u ON u.id = mm.user_id WHERE mm.room_id = ? AND u.github_id = ?', m[1], gh.github_id);
+    if (already) throw new HttpError(409, `@${gh.login} уже в кімнаті.`);
+    const t = token(24), now = Date.now();
+    db.run('INSERT INTO invites (token_hash, room_id, github_id, github_login, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?,?)',
+      sha256(t), m[1], gh.github_id, gh.login, s.user.id, now, now + INVITE_DAYS * 864e5);
+    send(res, 201, { url: `${config.baseUrl}/i/${t}`, login: gh.login, expires_at: now + INVITE_DAYS * 864e5 });
+  });
+  route('GET', /^\/api\/rooms\/([\w]{12})\/invites$/, ({ res, s, m }) => {
+    const me = needMember(m[1], s.user);
+    if (me.role !== 'owner') return send(res, 200, { invites: [] });
+    send(res, 200, { invites: db.all('SELECT id, github_login, created_at, expires_at FROM invites WHERE room_id = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ? ORDER BY id DESC', m[1], Date.now()) });
+  });
+  route('DELETE', /^\/api\/rooms\/([\w]{12})\/invites\/(\d+)$/, ({ res, s, m }) => {
+    const me = needMember(m[1], s.user);
+    if (me.role !== 'owner') throw new HttpError(403, 'Відкликає лише власник кімнати.');
+    db.run('UPDATE invites SET revoked_at = ? WHERE id = ? AND room_id = ? AND used_at IS NULL', Date.now(), Number(m[2]), m[1]);
+    send(res, 200, { ok: true });
+  });
+  route('DELETE', /^\/api\/rooms\/([\w]{12})\/members\/(\d+)$/, ({ res, s, m }) => {
+    const me = needMember(m[1], s.user);
+    const uid = Number(m[2]);
+    if (uid !== s.user.id && me.role !== 'owner') throw new HttpError(403, 'Прибрати іншого учасника може лише власник.');
+    const target = membership(m[1], uid);
+    if (!target) throw new HttpError(404, 'Такого учасника немає.');
+    if (target.role === 'owner') throw new HttpError(400, 'Власник не може вийти з власної кімнати. Її можна видалити.');
+    const u = db.get('SELECT * FROM users WHERE id = ?', uid);
+    const ids = memberIds(m[1]);
+    for (const h of hooks.onMemberRemove || []) h(m[1], uid);
+    db.run('DELETE FROM members WHERE room_id = ? AND user_id = ?', m[1], uid);
+    event(m[1], `${u.name} більше не в кімнаті`);
+    push(ids, 'rooms', {});
+    send(res, 200, { ok: true });
+  });
+
+  route('GET', /^\/api\/search$/, ({ res, s, url }) => {
+    const q = String(url.searchParams.get('q') || '').trim().toLowerCase();
+    if (q.length < 2) return send(res, 200, { hits: [] });
+    const like = '%' + q.replace(/[\\%_]/g, c => '\\' + c) + '%';
+    const rows = db.all(`SELECT x.*, r.title FROM messages x JOIN members m ON m.room_id = x.room_id AND m.user_id = ? JOIN rooms r ON r.id = x.room_id
+                         WHERE x.kind != 'event' AND x.text_lc LIKE ? ESCAPE '\\' ORDER BY x.id DESC LIMIT 40`, s.user.id, like);
+    send(res, 200, { hits: rows.map(x => ({ room: x.room_id, room_title: x.title, id: x.id, at: x.created_at, author: author(x.author_kind, x.author_id).name, snippet: snippet(x.text, q) })) });
+  });
+  function snippet(text, q) {
+    const i = text.toLowerCase().indexOf(q);
+    const from = Math.max(0, i - 50);
+    return (from ? '…' : '') + text.slice(from, from + 160).replace(/\s+/g, ' ') + (from + 160 < text.length ? '…' : '');
+  }
+
+  route('GET', /^\/api\/stream$/, ({ req, res, s }) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });
+    res.write('retry: 3000\n\n');
+    let set = streams.get(s.user.id); if (!set) streams.set(s.user.id, set = new Set());
+    set.add(res);
+    req.on('close', () => { set.delete(res); if (!set.size) streams.delete(s.user.id); });
+  });
+
+  // ---------------------------------------------------------------- invite links
+  route('GET', /^\/i\/([\w-]{20,64})$/, ({ req, res, s, m }) => {
+    if (!s) { res.writeHead(302, { Location: `/?next=${encodeURIComponent('/i/' + m[1])}`, 'Cache-Control': 'no-store' }); return res.end(); }
+    const inv = db.get('SELECT * FROM invites WHERE token_hash = ?', sha256(m[1]));
+    if (!inv) return page(res, 404, 'Запрошення не знайдено', 'Посилання неправильне або кімнату вже видалено.', ['На головну', '/']);
+    if (inv.revoked_at) return page(res, 410, 'Запрошення відкликано', 'Власник кімнати скасував це запрошення. Попроси нове.', ['На головну', '/']);
+    if (inv.used_at) {
+      if (inv.used_by === s.user.id) { res.writeHead(302, { Location: `/r/${inv.room_id}` }); return res.end(); }
+      return page(res, 410, 'Запрошення вже використано', 'Кожне запрошення спрацьовує один раз. Попроси власника кімнати надіслати нове.', ['На головну', '/']);
+    }
+    if (inv.expires_at < Date.now()) return page(res, 410, 'Запрошення прострочено', 'Запрошення діє 7 днів. Попроси власника кімнати надіслати нове.', ['На головну', '/']);
+    if (inv.github_id !== s.user.github_id)
+      return page(res, 403, 'Це запрошення не для тебе', `Його надіслали для @${inv.github_login}, а ти увійшов як @${s.user.login}. Перевір акаунт GitHub або попроси запрошення на свій логін.`, ['На головну', '/']);
+    const ok = db.tx(() => {
+      const r = db.run('UPDATE invites SET used_at = ?, used_by = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL', Date.now(), s.user.id, inv.id);
+      if (!r.changes) return false;
+      db.run('INSERT OR IGNORE INTO members (room_id, user_id, role, added_at, last_read_id) VALUES (?,?,?,?,0)', inv.room_id, s.user.id, 'member', Date.now());
+      return true;
+    });
+    if (!ok) return page(res, 410, 'Запрошення вже використано', 'Кожне запрошення спрацьовує один раз.', ['На головну', '/']);
+    event(inv.room_id, `${s.user.name} тепер у кімнаті`);
+    push(memberIds(inv.room_id), 'rooms', {});
+    res.writeHead(302, { Location: `/r/${inv.room_id}` }); res.end();
+  });
+
+  // ---------------------------------------------------------------- dispatch
+  async function handle(req, res) {
+    const url = new URL(req.url, 'http://local');
+    const p = url.pathname;
+    try {
+      if (p === '/healthz') return send(res, 200, 'ok');
+      if (p === '/config.json') return send(res, 200, { devLogin: !!config.devLogin, github: !!config.github.clientId, baseUrl: config.baseUrl });
+      const s = auth.session(req);
+      for (const [method, re, fn] of routes) {
+        if (method !== req.method) continue;
+        const m = p.match(re); if (!m) continue;
+        const isApi = p.startsWith('/api/') && !p.startsWith('/api/agent/') && !p.startsWith('/api/pair');
+        if (isApi && !s) throw new HttpError(401, 'Потрібен вхід.');
+        if (isApi && req.method !== 'GET') auth.checkCsrf(req, s);
+        return await fn({ req, res, url, s, m });
+      }
+      if (req.method === 'GET' && !p.startsWith('/api/')) {
+        if (p === '/' || p === '/new' || /^\/r\/[\w]{12}$/.test(p)) return serveStatic(res, 'index.html', { html: true });
+        if (/^\/[\w.-]+(\/[\w.-]+)*$/.test(p) && !p.includes('..')) return serveStatic(res, p.slice(1));
+      }
+      return send(res, 404, { error: 'Немає такого шляху.' });
+    } catch (e) {
+      if (e instanceof HttpError) { if (!res.headersSent) send(res, e.status, { error: e.message, ...(e.extra || {}) }); return; }
+      console.error(e);
+      if (!res.headersSent) send(res, 500, { error: 'Помилка сервера.' });
+    }
+  }
+
+  const server = http.createServer(handle);
+  server.requestTimeout = 0;
+  server.headersTimeout = 65000;
+  server.keepAliveTimeout = 65000;
+  return { server, db, ctx: ctxApi, close: () => { clearInterval(heartbeat); for (const set of streams.values()) for (const r of set) r.end(); server.close(); db.raw.close(); } };
+}
+
+module.exports = { createApp };
