@@ -92,6 +92,7 @@ For a real deployment, create a GitHub OAuth App with the callback `https://your
 | `SLOP_SECRET` | 64 hex characters (`openssl rand -hex 32`) that seal bucket credentials |
 | `DATA_DIR` | Where the SQLite database lives |
 | `SLOP_RELAY_BUDGET` | Bytes per room per month passed through the server (default 1 GiB) |
+| `SLOP_SOURCE_URL` | Where the sign-in page links for the source code; point it at your fork if you changed the code (AGPL-3.0) |
 
 [`server/docker-compose.yml`](server/docker-compose.yml) runs it behind Traefik with Let's Encrypt; copy [`server/.env.example`](server/.env.example) to `server/.env` to set your host and paths. Backups, updates and the rest of the operations notes are in [`server/README.md`](server/README.md).
 

@@ -12,6 +12,9 @@ const store = {
 };
 
 const I = {
+  out: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5M5 12h11"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
   up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>',
   down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg>',
   edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
@@ -129,11 +132,18 @@ async function boot() {
 }
 function fatal(text) { document.getElementById('app').className = 'full'; document.getElementById('app').innerHTML = `<main class="notice"><img src="/mascot.svg" alt="" width="56"><h1>${T('g.oops')}</h1><p>${esc(text)}</p><a class="btn primary" href="/">${T('g.reload')}</a></main>`; }
 
+// The button names the theme it switches to, and shows its icon.
+function themeButton() {
+  const to = window.SlopTheme.current() === 'dark' ? 'light' : 'dark';
+  return `<button class="ib theme" data-act="theme" aria-label="${T('th.' + to)}" title="${T('th.' + to)}">${to === 'dark' ? I.moon : I.sun}</button>`;
+}
+window.SlopTheme.onChange(() => { for (const b of document.querySelectorAll('[data-act=theme]')) b.outerHTML = themeButton(); });
+
 function signin() {
   const next = new URLSearchParams(location.search).get('next') || (location.pathname !== '/' ? location.pathname : '/');
   const app = document.getElementById('app');
   app.className = 'full';
-  app.innerHTML = `<div class="signin"><button class="btn ghost sm lang-top" data-act="lang" aria-label="${T('lang.switch')}" title="${T('lang.switch')}">${T('lang.short')}</button><div class="signin-c">
+  app.innerHTML = `<div class="signin"><div class="top">${themeButton()}<button class="btn ghost sm" data-act="lang" aria-label="${T('lang.switch')}" title="${T('lang.switch')}">${T('lang.short')}</button></div><div class="signin-c">
     <img class="art" src="/img/hero.webp?v=2" width="1200" height="362" alt="">
     <div class="brand"><img src="/mascot.svg" alt="">Slopovyna</div>
     <h1>${T('in.title')}</h1>
@@ -141,7 +151,8 @@ function signin() {
     <a class="btn primary" href="/auth/github?next=${encodeURIComponent(next)}">${I.gh}${T('in.github')}</a>
     <small>${T('in.note')}</small>
     ${S.config.devLogin ? `<form class="dev" id="devf"><label class="sr" for="devl">${T('in.devLabel')}</label><input id="devl" placeholder="${T('in.devPh')}" autocomplete="off"><button class="btn sm">${T('in.devGo')}</button></form>` : ''}
-  </div></div>`;
+  </div>
+    <footer class="signin-foot"><a href="${esc(S.config.sourceUrl || 'https://github.com/Stepanokdev/slopovyna')}" rel="noopener">${I.gh}${T('in.source')}</a></footer></div>`;
   const f = $('#devf');
   if (f) f.onsubmit = e => { e.preventDefault(); location.href = `/auth/dev?login=${encodeURIComponent($('#devl').value.trim())}&next=${encodeURIComponent(next)}`; };
 }
@@ -242,7 +253,7 @@ function renderSidebar() {
       const cur = S.room && r.id === S.room.id;
       return `<a class="item" href="/r/${r.id}" data-nav="/r/${r.id}" ${cur ? 'aria-current="page"' : ''}><span class="t">${esc(r.title)}</span>${!cur && r.mentioned ? `<span class="at-badge" aria-label="${T('sb.mentioned')}">@</span>` : (!cur && r.unread ? `<span class="u" aria-label="${T('sb.unread')}"></span>` : '')}</a>`;
     }).join('')}`).join('') : `<p class="sb-empty">${T('sb.empty')}</p>`}</div>
-    <div class="sb-foot"><div class="me">${avatar(S.me)}<span class="who">${esc(S.me.name)}<small>@${esc(S.me.login)}</small></span><button class="btn ghost sm" data-act="lang" aria-label="${T('lang.switch')}" title="${T('lang.switch')}">${T('lang.code')}</button><button class="btn ghost sm" data-act="logout">${T('sb.logout')}</button></div></div>`;
+    <div class="sb-foot"><div class="me">${avatar(S.me)}<span class="who">${esc(S.me.name)}<small>@${esc(S.me.login)}</small></span>${themeButton()}<button class="btn ghost sm" data-act="lang" aria-label="${T('lang.switch')}" title="${T('lang.switch')}">${T('lang.code')}</button><button class="ib" data-act="logout" aria-label="${T('sb.logout')}" title="${T('sb.logout')}">${I.out}</button></div></div>`;
 }
 
 // ------------------------------------------------------------------ new room
@@ -587,6 +598,7 @@ document.addEventListener('click', async e => {
     else if (a === 'panel') { S.panel = !S.panel; renderPanel(); }
     else if (a === 'search') openSearch();
     else if (a === 'lang') window.SlopI18n.set(window.SlopI18n.lang() === 'en' ? 'uk' : 'en');
+    else if (a === 'theme') window.SlopTheme.toggle();
     else if (a === 'invite') openInvite();
     else if (a === 'bottom') jumpBottom();
     else if (a === 'logout') { await api('POST', '/auth/logout'); location.href = '/'; }

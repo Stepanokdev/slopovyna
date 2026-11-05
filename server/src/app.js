@@ -157,7 +157,7 @@ function createApp(config) {
     const title = t(lang, titleKey, vars), text = t(lang, textKey, vars);
     const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Slopovyna</title><link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <meta property="og:site_name" content="Slopovyna"><meta property="og:title" content="${esc(t(lang, 'og.title'))}"><meta property="og:image" content="${esc(config.baseUrl)}/img/og-${lang}.png"><meta name="twitter:card" content="summary_large_image">
-<link rel="stylesheet" href="/app.css"></head>
+<meta name="theme-color" content="#ffffff"><script src="/theme.js"></script><link rel="stylesheet" href="/app.css"></head>
 <body class="plain"><main class="notice"><img class="art" src="/img/empty.webp?v=2" alt="" width="700" height="239"><div class="brand"><img src="/mascot.svg" alt="" width="22">Slopovyna</div><h1>${esc(title)}</h1><p>${esc(text)}</p>${link ? `<a class="btn primary" href="${esc(link[1])}">${esc(t(lang, link[0]))}</a>` : ''}</main></body></html>`;
     send(res, code, html, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': CSP, 'X-Frame-Options': 'DENY', ...(config.baseUrl.startsWith('https://') ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}) });
   }
@@ -354,7 +354,7 @@ function createApp(config) {
     const p = url.pathname;
     try {
       if (p === '/healthz') return send(res, 200, 'ok');
-      if (p === '/config.json') return send(res, 200, { devLogin: !!config.devLogin, github: !!config.github.clientId, baseUrl: config.baseUrl, lang: langOf(req) });
+      if (p === '/config.json') return send(res, 200, { devLogin: !!config.devLogin, github: !!config.github.clientId, baseUrl: config.baseUrl, lang: langOf(req), sourceUrl: config.sourceUrl || 'https://github.com/Stepanokdev/slopovyna' });
       res.slopLang = langOf(req);
       const s = auth.session(req);
       for (const [method, re, fn] of routes) {

@@ -92,6 +92,7 @@ npm run dev     # http://localhost:3000, з локальним входом за
 | `SLOP_SECRET` | 64 hex-символи (`openssl rand -hex 32`), якими запечатуються доступи до сховищ |
 | `DATA_DIR` | Де лежить база SQLite |
 | `SLOP_RELAY_BUDGET` | Скільки байтів на кімнату на місяць іде через сервер (за замовчуванням 1 ГіБ) |
+| `SLOP_SOURCE_URL` | Куди веде посилання на код на сторінці входу; якщо ти змінив код, вкажи свій форк (AGPL-3.0) |
 
 [`server/docker-compose.yml`](server/docker-compose.yml) запускає сервіс за Traefik з Let's Encrypt; скопіюй [`server/.env.example`](server/.env.example) у `server/.env`, щоб задати свій хост і шляхи. Бекапи, оновлення та інші нотатки з експлуатації — у [`server/README.md`](server/README.md) (англійською).
 

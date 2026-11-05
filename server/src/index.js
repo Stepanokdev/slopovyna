@@ -12,6 +12,8 @@ const config = {
   devLogin: process.env.SLOP_DEV_LOGIN === '1',
   connectSrc: process.env.SLOP_CONNECT_SRC || 'https:',
   allowHttpStorage: process.env.SLOP_ALLOW_HTTP_STORAGE === '1',
+  // AGPL-3.0: people using this server can get its source. Point it at your fork if you changed the code.
+  sourceUrl: process.env.SLOP_SOURCE_URL || 'https://github.com/Stepanokdev/slopovyna',
 };
 // Key for sealing room bucket secrets: SLOP_SECRET, or a random key kept next to the database.
 config.secretKey = process.env.SLOP_SECRET || (() => {

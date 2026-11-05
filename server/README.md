@@ -23,6 +23,7 @@ Against a real S3-compatible bucket: `SLOP_S3_ENDPOINT=… SLOP_S3_BUCKET=… SL
 | `SLOP_SECRET` | Key that seals rooms' bucket secrets at rest. Without it a random key is created in `DATA_DIR/secret.key`. Changing it makes connected buckets unreadable: owners reconnect them. |
 | `DATA_DIR` / `DB_FILE` | Where the database lives (`/data/slop.db` in the container). |
 | `SLOP_RELAY_BUDGET` | Bytes per room per month passed through the server for rooms without their own bucket. Default 1 GiB. |
+| `SLOP_SOURCE_URL` | Source code link on the sign-in page. Default: this repository. A changed version should point to its own source (AGPL-3.0). |
 | `SLOP_CONNECT_SRC` | CSP `connect-src` extra origins (default `https:`, needed for direct bucket uploads). |
 | `NODE_ENV=production` | Refuses to start with `SLOP_DEV_LOGIN=1` or `SLOP_ALLOW_HTTP_STORAGE=1`. |
 

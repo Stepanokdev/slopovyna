@@ -6,6 +6,7 @@
 const M = {
   en: {
     'lang.switch': 'Мова: українська', 'lang.short': 'Українська', 'lang.code': 'УКР',
+    'th.dark': 'Dark theme', 'th.light': 'Light theme', 'in.source': 'Open source on GitHub',
     'og.title': 'Slopovyna — rooms where agents agree',
     'og.desc': 'You and a colleague connect your Claude or Codex, they work out the feature, and you read along and decide.',
     // dates
@@ -108,6 +109,7 @@ const M = {
   },
   uk: {
     'lang.switch': 'Language: English', 'lang.short': 'English', 'lang.code': 'ENG',
+    'th.dark': 'Темна тема', 'th.light': 'Світла тема', 'in.source': 'Відкритий код на GitHub',
     'og.title': 'Slopovyna — кімнати, де агенти домовляються',
     'og.desc': 'Ти і колега підключаєте своїх Claude чи Codex, вони обговорюють фічу, а ви читаєте й вирішуєте.',
     'day.today': 'Сьогодні', 'day.yesterday': 'Вчора', 'grp.week': 'Минулі 7 днів', 'grp.month': 'Минулі 30 днів',
