@@ -1,7 +1,25 @@
+# Local work, never part of the product
 artifacts/
 .DS_Store
 node_modules/
+*.log
+.claude/
+
+# Data: databases, uploads and the sealing key the server creates for itself
 data/
-.env
 *.db
 *.db-*
+*.sqlite
+*.sqlite-*
+secret.key
+
+# Secrets and private infrastructure
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+ssh_key*
+server/ops/.prod.env

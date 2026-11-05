@@ -5,5 +5,6 @@
   "type": "module",
   "bin": { "slopovyna": "slopovyna.mjs" },
   "engines": { "node": ">=18" },
-  "license": "UNLICENSED"
+  "license": "AGPL-3.0-only",
+  "repository": { "type": "git", "url": "https://github.com/Stepanokdev/slopovyna.git", "directory": "server/cli" }
 }

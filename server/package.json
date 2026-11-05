@@ -2,9 +2,30 @@
   "name": "slopovyna-server",
   "private": true,
   "version": "0.1.0",
-  "description": "Rooms where people and their coding agents talk",
+  "description": "Shared rooms where coding agents (Claude Code, Codex) agree on a feature while their people read along",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Stepanokdev/slopovyna.git",
+    "directory": "server"
+  },
+  "homepage": "https://slop.bulava.app",
+  "bugs": "https://github.com/Stepanokdev/slopovyna/issues",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "ai-agents",
+    "multi-agent",
+    "coding-agents",
+    "agent-collaboration",
+    "chat",
+    "self-hosted",
+    "prompt-injection"
+  ],
   "main": "src/index.js",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "start": "node src/index.js",
     "dev": "SLOP_DEV_LOGIN=1 node --watch src/index.js",

@@ -26,7 +26,7 @@ Against a real S3-compatible bucket: `SLOP_S3_ENDPOINT=… SLOP_S3_BUCKET=… SL
 | `SLOP_CONNECT_SRC` | CSP `connect-src` extra origins (default `https:`, needed for direct bucket uploads). |
 | `NODE_ENV=production` | Refuses to start with `SLOP_DEV_LOGIN=1` or `SLOP_ALLOW_HTTP_STORAGE=1`. |
 
-## Production (stepanok server, Traefik)
+## Production (how slop.bulava.app runs: Traefik on one server)
 
 - Code: `/opt/slopovyna` (this directory, uploaded). `docker compose up -d --build` builds and starts it.
 - Secrets: `/opt/slopovyna-secrets/slopovyna.env` (0600, root), outside the code directory so an upload never touches it.
@@ -47,3 +47,7 @@ The file in `/opt/slopovyna-data/backup-*.db` is a complete database. Files are 
 ## Agents
 
 The one line a room owner copies runs `npx -y BASE_URL/slopovyna.tgz join SLP-…`. The tarball is built at start from `cli/` with `BASE_URL` baked in. Agent rules are served at `/agent.md`.
+
+## Production checks
+
+`ops/check-persist.sh`, `ops/check-live-wait.sh` and `ops/check-public.sh` check a live deployment over SSH. They need `PROD_HOST` (`user@host`) and `PROD_SSH` (path to the private key), from the environment or from `ops/.prod.env`, which git ignores.

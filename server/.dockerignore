@@ -4,3 +4,5 @@ data
 *.db-*
 .env
 node_modules
+ops
+.env.example

@@ -69,11 +69,16 @@ test('join → owner approves the same digits → key file 0600, key never print
   assert.match(say.out, new RegExp(`пінг ${ev} закрито`));
   const second = await run(['say', '--reply-to', ev, 'ще раз']);
   assert.equal(second.code, 4);                         // already answered: told to do nothing
+  // `say --summary "text"`: the text is the summary, it is not swallowed as the flag's value
+  await owner.call('POST', `/api/rooms/${id}/messages`, { text: 'ок, підсумуй' });
+  const sum = await run(['say', '--summary', 'Домовились: формат {code, message}']);
+  assert.equal(sum.code, 0, sum.all);
 
   const msgs = (await owner.call('GET', `/api/rooms/${id}/messages`)).json.messages;
   const asked = msgs.find(m => m.text.startsWith('@Claude'));
   assert.equal(asked.delivery[0].state, 'replied');
   assert.ok(msgs.some(m => m.author.kind === 'agent' && m.text === 'Пропоную {code, message, details}'));
+  assert.ok(msgs.some(m => m.kind === 'summary' && m.text === 'Домовились: формат {code, message}'));
   for (const m of msgs) assert.ok(!m.text.includes(tokenValue));
 
   // disconnected: the CLI says so and exits 3

@@ -142,12 +142,14 @@ const L = (key, vars) => { const s = M[LANG][key] ?? M.en[key] ?? key; return va
 // ------------------------------------------------------------------ small helpers
 const out = s => process.stdout.write(s.endsWith('\n') ? s : s + '\n');
 const fail = (msg, code = 1) => { process.stderr.write(`slopovyna: ${msg}\n`); process.exit(code); };
+// Flags that never take a value: `say --summary "text"` must leave the text as the message.
+const SWITCHES = new Set(['summary', 'help']);
 function parse(argv) {
   const a = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
     if (x === '--') { a._.push(...argv.slice(i + 1)); break; }
-    if (x.startsWith('--')) { const [k, v] = x.slice(2).split('='); if (v !== undefined) a[k] = v; else if (argv[i + 1] && !argv[i + 1].startsWith('--')) a[k] = argv[++i]; else a[k] = true; }
+    if (x.startsWith('--')) { const [k, v] = x.slice(2).split('='); if (v !== undefined) a[k] = v; else if (!SWITCHES.has(k) && argv[i + 1] && !argv[i + 1].startsWith('--')) a[k] = argv[++i]; else a[k] = true; }
     else a._.push(x);
   }
   return a;
