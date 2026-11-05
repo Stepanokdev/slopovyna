@@ -13,7 +13,9 @@ if [ "${1:-}" = --local ]; then . "$here/_env.sh"; else . "$here/_ssh.sh"; fi
 cd "$(git rev-parse --show-toplevel)"
 R=${GITHUB_REPO:-Stepanokdev/slopovyna}
 d=$(mktemp -d); dev=""
-cleanup() { [ -n "$dev" ] && pkill -f "$d/c/server" 2>/dev/null; rm -rf "$d"; }
+# npm run dev → node --watch → node: stop the whole tree, children first
+killtree() { local c; for c in $(pgrep -P "$1"); do killtree "$c"; done; kill "$1" 2>/dev/null; }
+cleanup() { [ -n "$dev" ] && killtree "$dev"; rm -rf "$d"; }
 trap cleanup EXIT
 
 j=$(curl -fsS "https://api.github.com/repos/$R") || { echo "FAIL: repository not reachable"; exit 1; }
@@ -43,7 +45,7 @@ for f in server/ops/.prod.env .env server/.env x.pem data/slop.db secret.key; do
 need "fresh clone: npm test" bash -c "cd '$d/c/server' && npm test"
 # README: `npm run dev` gives http://localhost:3000 with a local sign-in form. A free port is used here.
 port=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
-(cd "$d/c/server" && PORT=$port npm run dev >"$d/dev.log" 2>&1 &); dev=1
+cd "$d/c/server"; PORT=$port npm run dev >"$d/dev.log" 2>&1 & dev=$!; cd - >/dev/null
 for i in $(seq 1 40); do curl -fsS "http://localhost:$port/healthz" >/dev/null 2>&1 && break; sleep 0.25; done
 B=http://localhost:$port
 need "npm run dev answers"               test "$(curl -fsS $B/healthz)" = ok
@@ -51,5 +53,6 @@ need "the page offers the local sign-in" bash -c "curl -fsS $B/config.json | gre
 cookie=$(curl -fsS -o /dev/null -D - "$B/auth/dev?login=readme-check&name=Readme" | sed -nE 's/^[Ss]et-[Cc]ookie: (slop_s=[^;]+).*/\1/p')
 need "local sign-in sets a session"      test -n "$cookie"
 need "signed in as readme-check"         bash -c "curl -fsS -H 'Cookie: $cookie' $B/api/me | grep -q '\"login\":\"readme-check\"'"
-pkill -f "$d/c/server" 2>/dev/null; dev=""; sleep 0.5
+killtree "$dev"; dev=""; sleep 1
 need "dev server stopped"                bash -c "! curl -fsS $B/healthz"
+need "no process left in the clone"     bash -c "! lsof -ti tcp:$port"
